@@ -1,0 +1,145 @@
+name: Run govulncheck on binaries
+description: >
+  Runs govulncheck on the Go binaries you ship. Every Go binary records the Go
+  release and module versions it was built with, so this needs no source and
+  no build, and checks the standard library of the release that actually built
+  each binary, which a source scan can't. It writes what it finds as JSON
+  (<report_name>.json), SARIF and OpenVEX. The step fails on vulnerabilities
+  at the scan level, unless report_only is true or ignore accepts them with a
+  reason; it always fails for a file that isn't a Go binary with build
+  information, when govulncheck can't complete, or when the database it read
+  is stale or says nothing about its age. The GitHub Actions twin of the orb's
+  vulncheck_bin command.
+author: juburr
+
+inputs:
+  binaries:
+    description: >
+      The binaries to scan: paths or glob patterns, such as bin/* or
+      dist/*/server, separated by commas or spaces, relative to working_dir. A
+      pattern that matches nothing fails the step.
+    required: true
+  db:
+    description: >
+      The vulnerability database: an https:// mirror of vuln.go.dev, or a
+      local copy as an absolute path or file:/// URL. Empty means the copy
+      fetch_vuln_db exported in GO_SECURITY_VULN_DB, or else
+      https://vuln.go.dev.
+    default: ""
+  extra_args:
+    description: >
+      More govulncheck arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      The options this command sets (-format, -json, -mode, -scan, -db, -show,
+      -C, -test, -tags) are refused.
+    default: ""
+  formats:
+    description: >
+      Report formats besides JSON, separated by commas or spaces: sarif
+      (<report_name>.sarif) and openvex (<report_name>.openvex.json). Empty
+      writes JSON alone.
+    default: sarif,openvex
+  ignore:
+    description: >
+      Vulnerabilities to accept, one per line: a GO-, CVE- or GHSA- ID and the
+      reason, such as "GO-2024-2687 the HTTP/2 server is never exposed". An
+      entry without a reason fails the step. Accepted vulnerabilities stay in
+      the reports, marked as such.
+    default: ""
+  junit:
+    description: >
+      Also write JUnit XML, one failing test case per vulnerability that
+      counts, for a JUnit reader such as a test report action.
+    default: "true"
+  max_db_age_days:
+    description: >
+      Fail when the database was last modified more than this many days ago,
+      as a stale copy can be. 0 means no limit.
+    default: "14"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/go-security-reports
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.json,
+      <report_name>.raw.json (govulncheck's own output), <report_name>.sarif,
+      <report_name>.openvex.json, <report_name>.run-record.json and
+      junit/<report_name>.xml. Give each run of this command in a job its own.
+    default: govulncheck-bin
+  report_only:
+    description: >
+      Report vulnerabilities without failing the step, to adopt the check
+      gradually. A govulncheck that can't complete, or a stale database, still
+      fails it.
+    default: "false"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which binaries (with their SHA-256 and Go release), with which database
+      and tools, and what it found.
+    default: "false"
+  scan:
+    description: >
+      What counts: symbol, vulnerabilities in functions linked into the binary
+      (the others are reported without failing); package, also those in
+      packages it contains; module, every vulnerability in a module it was
+      built with. A binary stripped of its symbol table (-ldflags=-s) has
+      every vulnerable function of its modules reported as called.
+    default: symbol
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      go-security-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  working_dir:
+    description: >
+      Directory to run in: binaries are relative to it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=go-security-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: govulncheck binaries
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_BINARIES: ${{ inputs.binaries }}
+        PARAM_DB: ${{ inputs.db }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FORMATS: ${{ inputs.formats }}
+        PARAM_IGNORE: ${{ inputs.ignore }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_MAX_DB_AGE_DAYS: ${{ inputs.max_db_age_days }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SCAN: ${{ inputs.scan }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/vulncheck_bin.sh"
+        "SCRIPT_GO_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/go_security.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

@@ -1,0 +1,12 @@
+version: 2.1
+
+description: >
+  Verified installs of Go, govulncheck, gosec and go-licenses, and commands that check Go code and the binaries it
+  ships for security: reachable vulnerabilities in source and in binaries, an offline vulnerability database, static
+  security analysis with justified suppressions, license allowlists, module integrity and toolchain pinning, and a
+  FIPS 140-3 gate on shipped binaries, with SARIF, OpenVEX, JUnit and run records. The same commands ship as GitHub
+  Actions.
+
+display:
+  home_url: "https://github.com/juburr/go-security-orb"
+  source_url: "https://github.com/juburr/go-security-orb"

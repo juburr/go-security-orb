@@ -1,0 +1,172 @@
+description: >
+  Runs govulncheck on each module's source, which reports only the known
+  vulnerabilities in code your packages can actually call (scan: symbol),
+  and writes them as JSON (<report_name>.json), SARIF and OpenVEX. The step
+  fails on vulnerabilities at the scan level, unless report_only is true or
+  ignore accepts them with a reason; it always fails when govulncheck can't
+  complete, or the database it read is stale or says nothing about its age.
+  The standard library is checked as the Go release go_version names, or
+  the go on the PATH, which may not be the Go you ship with: vulncheck_bin
+  reads it from each binary.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: modules are relative to it.
+  modules:
+    type: string
+    default: "."
+    description: >
+      The modules to scan: directories that hold a go.mod, relative to
+      working_dir, separated by commas or spaces; or all, for every module in
+      working_dir and below it, skipping vendor and testdata directories and
+      those whose names start with "." or "_", as go ./... patterns do.
+      Environment variables are expanded.
+  packages:
+    type: string
+    default: "./..."
+    description: >
+      The package patterns to scan in each module, separated by commas or
+      spaces. A module scan (scan: module) takes none. Environment variables
+      are expanded.
+  tags:
+    type: string
+    default: ""
+    description: >
+      Build tags, separated by commas. Environment variables are expanded.
+  test:
+    type: boolean
+    default: false
+    description: >
+      Also scan the packages' tests, which can call code the packages don't.
+  scan:
+    type: enum
+    enum: ["symbol", "package", "module"]
+    default: symbol
+    description: >
+      What counts: symbol, vulnerabilities in functions your code can call
+      (the others are reported without failing); package, also those in
+      packages it imports; module, every vulnerability in a module it
+      requires. Symbol scans type-check the code, and need the most memory:
+      several GB for a large module.
+  go_version:
+    type: string
+    default: ""
+    description: >
+      The Go release whose standard library to check, such as go1.27.3: the
+      one you build your binaries with. Empty means the go on the PATH.
+      Environment variables are expanded.
+  db:
+    type: string
+    default: ""
+    description: >
+      The vulnerability database: an https:// mirror of vuln.go.dev, or a
+      local copy as an absolute path or file:/// URL. Empty means the copy
+      fetch_vuln_db exported in GO_SECURITY_VULN_DB, or else
+      https://vuln.go.dev. Environment variables are expanded.
+  max_db_age_days:
+    type: integer
+    default: 14
+    description: >
+      Fail when the database was last modified more than this many days ago,
+      as a stale copy can be. 0 means no limit.
+  ignore:
+    type: string
+    default: ""
+    description: >
+      Vulnerabilities to accept, one per line: a GO-, CVE- or GHSA- ID and
+      the reason, such as "GO-2024-2687 the HTTP/2 server is never exposed".
+      An entry without a reason fails the step. Accepted vulnerabilities stay
+      in the reports, marked as such. Environment variables are expanded.
+  formats:
+    type: string
+    default: "sarif,openvex"
+    description: >
+      Report formats besides JSON, separated by commas or spaces: sarif
+      (<report_name>.sarif) and openvex (<report_name>.openvex.json). Empty
+      writes JSON alone.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More govulncheck arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      The options this command sets (-format, -json, -mode, -scan, -db, -show,
+      -C, -test, -tags) are refused.
+  output_dir:
+    type: string
+    default: /tmp/go-security-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: govulncheck
+    description: >
+      The reports' file name, without extension: <report_name>.json,
+      <report_name>.raw.json (govulncheck's own output),
+      <report_name>.sarif, <report_name>.openvex.json,
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each
+      run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one failing test case per vulnerability that
+      counts, and show it in CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which go.mod and go.sum, with which database, tools and settings, and
+      what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report vulnerabilities without failing the step, to adopt the check
+      gradually. A govulncheck that can't complete, or a stale database,
+      still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under go-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: govulncheck
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_DB: << parameters.db >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FORMATS: << parameters.formats >>
+        PARAM_GO_VERSION: << parameters.go_version >>
+        PARAM_IGNORE: << parameters.ignore >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MAX_DB_AGE_DAYS: << parameters.max_db_age_days >>
+        PARAM_MODULES: << parameters.modules >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SCAN: << parameters.scan >>
+        PARAM_TAGS: << parameters.tags >>
+        PARAM_TEST: << parameters.test >>
+        SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
+      command: << include(scripts/vulncheck.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: go-security-reports
+            when: always

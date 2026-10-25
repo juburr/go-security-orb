@@ -1,0 +1,90 @@
+description: >
+  Installs Go from its official Linux release archive, for amd64 or arm64,
+  picked from the machine's CPU architecture, after verifying the
+  archive's SHA-512 checksum, without root. Images such as cimg/go already
+  have Go; use this on other images, such as a machine executor, or to run a
+  verified Go release. The orb's commands run whichever go comes first on
+  the PATH, and Go may still switch to a newer release a go.mod asks for, as
+  its GOTOOLCHAIN setting allows.
+parameters:
+  caching:
+    type: boolean
+    default: true
+    description: >
+      Cache the downloaded release archive (about 70 MB) between jobs, keyed
+      by version, CPU architecture and home directory. Only verified archives
+      are cached, and a cached archive is verified again before it is
+      installed.
+  download_base_url:
+    type: string
+    default: ""
+    description: >
+      Base URL of an internal mirror of https://dl.google.com/go, such as an
+      Artifactory or Nexus remote repository, to download the Go release
+      archive from. It replaces https://dl.google.com/go in the download
+      URL, so the mirror must serve the same file names. It must be an
+      https:// URL, without credentials (user:password@) or a query or
+      fragment, which would show in the log. What is downloaded is still
+      verified against this orb's checksum table. Environment variables are
+      expanded.
+  install_path:
+    type: string
+    default: ""
+    description: >
+      Absolute path of the directory to install Go into: the Go
+      installation's root (GOROOT), whose bin directory is added to the PATH
+      of later steps when it isn't already on it. It must be missing, hold no
+      files, or be a Go installation this command installed before, which it
+      replaces, and be writable without root. Environment variables are expanded.
+      Defaults to $HOME/sdk/go.
+  verify_checksums:
+    type: enum
+    enum: ["false", "known_versions", "strict"]
+    default: strict
+    description: >
+      SHA-512 verification against this orb's checksum table. "strict"
+      (default) fails before downloading anything when the version has no
+      checksum in the table. "known_versions" verifies listed versions and
+      installs unlisted versions unverified, with a warning. "false" skips
+      verification and is not recommended.
+  version:
+    type: string
+    default: "1.27.3"
+    description: >
+      Version of Go to install, such as 1.27.3, without the "go" prefix. A
+      leading "v" is ignored, and environment variables are expanded.
+steps:
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        # The key is computed from a file that names the CPU (uname -m, as
+        # {{ arch }} also encodes the CPU model and would split the cache by
+        # host), HOME (a cache is restored to the absolute path it was saved
+        # from), and the version with environment variables expanded.
+        - run:
+            name: Prepare Go cache key
+            environment:
+              ORB_CACHE_KEY_FILE: /tmp/go-security-orb-go-cache-key
+              PARAM_VERSION: << parameters.version >>
+            command: << include(scripts/cache_key.sh) >>
+        # A saved cache can't be replaced. Bump v1 when an existing checksum
+        # table entry changes, so caches saved for the old bytes stop being
+        # restored.
+        - restore_cache:
+            key: go-security-orb-go-v1-<< parameters.version >>-{{ checksum "/tmp/go-security-orb-go-cache-key" }}
+  - run:
+      name: Install Go << parameters.version >>
+      environment:
+        PARAM_CACHING: << parameters.caching >>
+        PARAM_DOWNLOAD_BASE_URL: << parameters.download_base_url >>
+        PARAM_INSTALL_PATH: << parameters.install_path >>
+        PARAM_VERIFY_CHECKSUMS: << parameters.verify_checksums >>
+        PARAM_VERSION: << parameters.version >>
+      command: << include(install/go/install.sh) >>
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        - save_cache:
+            key: go-security-orb-go-v1-<< parameters.version >>-{{ checksum "/tmp/go-security-orb-go-cache-key" }}
+            paths:
+              - ~/.cache/go-security-orb-go

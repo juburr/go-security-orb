@@ -1,0 +1,31 @@
+description: >
+  Use private modules safely: mod_verify sets GOPRIVATE for your
+  organization's modules only (a pattern that matches public modules, which
+  would turn checksum verification off for them, fails the job), writes the
+  credentials from a context to ~/.netrc for go and git, and pins
+  GOTOOLCHAIN=local, all for the steps after it. Then it checks every
+  dependency against go.mod and go.sum.
+
+usage:
+  version: 2.1
+  orbs:
+    go-security: juburr/go-security-orb@0.1.0
+  jobs:
+    security:
+      docker:
+        - image: cimg/go:1.27
+      steps:
+        - checkout
+        - go-security/install
+        - go-security/mod_verify:
+            private_modules: github.com/my-org/*
+            private_host: github.com
+            username: PRIVATE_MODULES_USERNAME
+            password: PRIVATE_MODULES_TOKEN
+        - go-security/vulncheck
+  workflows:
+    security:
+      jobs:
+        - security:
+            # Holds PRIVATE_MODULES_USERNAME and PRIVATE_MODULES_TOKEN.
+            context: private-modules

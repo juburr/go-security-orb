@@ -1,0 +1,156 @@
+description: >
+  Checks that each module builds with exactly the dependencies its go.mod
+  and go.sum name, and that the job's Go settings don't weaken how go fetches
+  them. The step fails on settings that turn off checksum verification
+  (GOSUMDB=off, GONOSUMDB or GOPRIVATE matching public modules, GOINSECURE,
+  GOFLAGS=-mod=mod), on a go.mod that needs a newer Go than the one on the
+  PATH, on a go.sum that doesn't match what go downloads, on a module cache
+  whose contents were changed (go mod verify), on go.mod or go.sum entries
+  the build needs and they lack, and on a vendor directory that go mod vendor
+  wouldn't write, unless report_only is true. It also sets up private modules
+  (GOPRIVATE and credentials in ~/.netrc) and GOTOOLCHAIN=local for later
+  steps, so run it first.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: modules are relative to it.
+  modules:
+    type: string
+    default: "."
+    description: >
+      The modules to check: directories that hold a go.mod, relative to
+      working_dir, separated by commas or spaces; or all, for every module in
+      working_dir and below it, skipping vendor and testdata directories and
+      those whose names start with "." or "_", as go ./... patterns do.
+      Environment variables are expanded.
+  packages:
+    type: string
+    default: "./..."
+    description: >
+      The package patterns whose dependencies, with their tests', must all be
+      in go.mod and go.sum, separated by commas or spaces. Environment
+      variables are expanded.
+  tags:
+    type: string
+    default: ""
+    description: >
+      Build tags, separated by commas, for packages that import some
+      dependencies only with them. Environment variables are expanded.
+  pin_toolchain:
+    type: boolean
+    default: true
+    description: >
+      Run go with GOTOOLCHAIN=local here, and export it to later steps, so a
+      go or toolchain line in go.mod can't make go download and run a
+      different Go release. A go.mod that needs a newer Go than the one on
+      the PATH then fails the step.
+  check_vendor:
+    type: boolean
+    default: true
+    description: >
+      In a module with a vendor directory (vendor/modules.txt), check that it
+      holds exactly what go mod vendor writes. Needs Go 1.18 or newer.
+  private_modules:
+    type: string
+    default: ""
+    description: >
+      GOPRIVATE for this step and later ones: the module path patterns, such
+      as github.com/my-org/*, that go fetches straight from their hosts,
+      without the proxy or the checksum database, separated by commas. A
+      pattern that matches public modules, such as github.com, fails the
+      step. Empty leaves GOPRIVATE as the job sets it. Environment variables
+      are expanded.
+  private_host:
+    type: string
+    default: ""
+    description: >
+      The host to give the credentials in username and password to, such as
+      github.com, written to ~/.netrc (or the file NETRC names) with mode
+      0600 for this step and later ones. go, and git when go fetches from it,
+      read them there. Empty writes no credentials. Environment variables are
+      expanded.
+  username:
+    type: env_var_name
+    default: PRIVATE_MODULES_USERNAME
+    description: >
+      The environment variable that holds the user name for private_host.
+  password:
+    type: env_var_name
+    default: PRIVATE_MODULES_TOKEN
+    description: >
+      The environment variable that holds the password or token for
+      private_host.
+  output_dir:
+    type: string
+    default: /tmp/go-security-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: mod-verify
+    description: >
+      The reports' file name, without extension: <report_name>.json,
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each
+      run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one test case per check and module, and show it
+      in CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which go.mod, go.sum and vendor/modules.txt, with which Go and
+      settings, and what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report problems without failing the step, to adopt the check
+      gradually. A check go can't complete, such as a download that fails
+      for lack of network, still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under go-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: Verify Go modules
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_CHECK_VENDOR: << parameters.check_vendor >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MODULES: << parameters.modules >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_PASSWORD: << parameters.password >>
+        PARAM_PIN_TOOLCHAIN: << parameters.pin_toolchain >>
+        PARAM_PRIVATE_HOST: << parameters.private_host >>
+        PARAM_PRIVATE_MODULES: << parameters.private_modules >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_TAGS: << parameters.tags >>
+        PARAM_USERNAME: << parameters.username >>
+        SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
+      command: << include(scripts/mod_verify.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: go-security-reports
+            when: always

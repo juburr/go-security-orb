@@ -1,0 +1,134 @@
+description: >
+  Runs each module's tests linked with a Go Cryptographic Module (GOFIPS140)
+  and in FIPS 140-3 only mode (GODEBUG=fips140=only), where algorithms the
+  mode doesn't allow, such as MD5 for ETags or SHA-1 for legacy signatures,
+  return an error or panic. That shows which code paths would break or fall
+  outside the module before production finds them. Tests that fail count as
+  findings, which report_only (true by default) only reports, so the check
+  can be adopted first and enforced later; code that doesn't build, or a Go
+  older than 1.24, always fails the step. A test that panics ends its
+  package's test binary, so the package runs again without the tests that
+  panicked, to find what the later ones use (unless extra_args sets -skip).
+  It writes JSON, with the algorithms the mode refused, and JUnit.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: modules are relative to it.
+  modules:
+    type: string
+    default: "."
+    description: >
+      The modules to test: directories that hold a go.mod, relative to
+      working_dir, separated by commas or spaces; or all, for every module in
+      working_dir and below it, skipping vendor and testdata directories and
+      those whose names start with "." or "_", as go ./... patterns do.
+      Environment variables are expanded.
+  packages:
+    type: string
+    default: "./..."
+    description: >
+      The package patterns to test in each module, separated by commas or
+      spaces. Environment variables are expanded.
+  tags:
+    type: string
+    default: ""
+    description: >
+      Build tags, separated by commas. Environment variables are expanded.
+  gofips140:
+    type: string
+    default: v1.0.0
+    description: >
+      The Go Cryptographic Module version to link the tests with, as
+      GOFIPS140 takes it: a version such as v1.0.0 or v1.26.0, or the
+      certified or inprocess alias, which the Go release in use resolves.
+      off and latest are refused, since they link no validated module.
+      Environment variables are expanded.
+  fips140:
+    type: enum
+    enum: ["only", "on"]
+    default: "only"
+    description: >
+      The FIPS 140-3 mode to run the tests in: only, where algorithms the
+      mode doesn't allow fail, or on, the mode as production runs it, where
+      they still work (which shows that the code runs in the mode, with the
+      module's self-tests).
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More go test arguments, such as -run, -timeout or -count, split like
+      shell words. Nothing in them is expanded or run; environment variables
+      are expanded before splitting. -json, -v and -tags are refused, since
+      this command sets them.
+  output_dir:
+    type: string
+    default: /tmp/go-security-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: fips-test
+    description: >
+      The reports' file name, without extension: <report_name>.json,
+      <report_name>.test.json (go test's own output),
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each
+      run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one test case per test, and show it in CircleCI's
+      Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which go.mod and go.sum, with which Go, GOFIPS140 and GODEBUG, and what
+      failed.
+  report_only:
+    type: boolean
+    default: true
+    description: >
+      Report failing tests without failing the step. Set it to false to
+      enforce the check once the tests pass. Code that doesn't build still
+      fails the step.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under go-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: Test in FIPS 140-3 mode
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FIPS140: << parameters.fips140 >>
+        PARAM_GOFIPS140: << parameters.gofips140 >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MODULES: << parameters.modules >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_TAGS: << parameters.tags >>
+        SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
+      command: << include(scripts/fips_test.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: go-security-reports
+            when: always

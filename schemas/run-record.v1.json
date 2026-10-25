@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/juburr/go-security-orb/blob/main/schemas/run-record.v1.json",
+  "title": "go-security-orb run record, version 1",
+  "description": "What one go-security-orb command ran, on what, and what it found: written as <report_name>.run-record.json when a command's run_record parameter is true (the default for fips_bin). Fields are only ever added within version 1; a change that would break a reader gets a new schema URL.",
+  "type": "object",
+  "required": [
+    "schema", "command", "outcome", "exit_code", "started_at", "finished_at", "ci", "working_directory",
+    "tool", "arguments", "toolchain", "vuln_db", "inputs", "counts", "results", "reports"
+  ],
+  "properties": {
+    "schema": {
+      "const": "https://github.com/juburr/go-security-orb/blob/main/schemas/run-record.v1.json"
+    },
+    "command": {
+      "description": "The orb command that wrote the record.",
+      "enum": ["gosec", "licenses", "vulncheck", "vulncheck_bin", "mod_verify", "fips_bin", "fips_test"]
+    },
+    "outcome": {
+      "description": "passed: no findings. findings: findings failed the step. findings-reported: findings, passed because report_only is true. error: a check did not complete, so there is no verdict, and the step failed.",
+      "enum": ["passed", "findings", "findings-reported", "error"]
+    },
+    "exit_code": {
+      "description": "1 when the outcome is error, else 0. The step's own exit code also depends on report_only.",
+      "type": "integer"
+    },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "finished_at": { "$ref": "#/$defs/timestamp" },
+    "ci": {
+      "description": "The CI job the command ran in: a CircleCI job (from CIRCLE_BUILD_URL, CIRCLE_SHA1, CIRCLE_JOB and the project), or a GitHub Actions run (from GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_SHA and GITHUB_JOB); null elsewhere.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["provider", "build_url", "sha1", "job", "repository"],
+          "properties": {
+            "provider": { "enum": ["circleci", "github-actions"] },
+            "build_url": { "type": "string" },
+            "sha1": { "type": "string" },
+            "job": { "type": "string" },
+            "repository": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "working_directory": {
+      "description": "The absolute directory the command ran in. Relative paths in arguments and results are relative to it.",
+      "type": "string"
+    },
+    "tool": {
+      "description": "The tool binary the command ran: gosec, go-licenses or govulncheck, or go for mod_verify, fips_bin and fips_test.",
+      "$ref": "#/$defs/tool"
+    },
+    "arguments": {
+      "description": "The arguments the tool ran with that decide what it checks, without the ones the command adds to read its results (such as gosec's -fmt and -out, or govulncheck's -format json) and without the module directories or binaries, which are in inputs.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "toolchain": {
+      "description": "The go on the PATH and the Go settings that decide what it fetches and builds, from go env; null without go. GOPROXY and GOSUMDB lose any userinfo, query and fragment.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["go", "env"],
+          "properties": {
+            "go": { "$ref": "#/$defs/tool" },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        }
+      ]
+    },
+    "vuln_db": {
+      "description": "The Go vulnerability database vulncheck and vulncheck_bin read; null for the other commands.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["url", "last_modified", "fetched"],
+          "properties": {
+            "url": { "description": "The database URL, without userinfo, query and fragment.", "type": "string" },
+            "last_modified": {
+              "description": "What the database says its last change was; null when no scan completed.",
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }]
+            },
+            "fetched": {
+              "description": "For a copy fetch_vuln_db fetched, what it recorded: where from, the zip's SHA-256, when, the database's last change and its number of entries. null for any other database.",
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["source", "zip_sha256", "fetched_at", "modified", "entries"],
+                  "properties": {
+                    "source": { "type": "string" },
+                    "zip_sha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] },
+                    "fetched_at": { "$ref": "#/$defs/timestamp" },
+                    "modified": { "type": "string" },
+                    "entries": { "type": "integer" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "inputs": {
+      "description": "The files the result depends on, by role: each module's go.mod and go.sum, vendor/modules.txt (mod_verify), gosec's config, and the binaries vulncheck_bin and fips_bin check.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "path", "sha256"],
+        "properties": {
+          "role": { "enum": ["go.mod", "go.sum", "vendor/modules.txt", "config", "binary"] },
+          "path": { "type": "string" },
+          "sha256": { "description": "null when the file doesn't exist, such as the go.sum of a module without dependencies.", "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] }
+        }
+      }
+    },
+    "counts": {
+      "description": "The command's own summary of what it found, such as the vulnerabilities that count and those ignore accepted, or the binaries that failed fips_bin's checks.",
+      "type": ["object", "null"]
+    },
+    "results": {
+      "description": "One entry per item checked, where the command checks several: each scan for vulncheck and vulncheck_bin (with each binary's SHA-256 and Go release), each module for mod_verify and fips_test, each binary for fips_bin (with its SHA-256, Go release, GOFIPS140, default fips140 mode, cgo setting and the cryptography modules outside the standard library it links). null for the others.",
+      "type": ["array", "null"],
+      "items": { "type": "object" }
+    },
+    "reports": {
+      "description": "Every report the command wrote, with its SHA-256.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" },
+    "tool": {
+      "type": "object",
+      "required": ["name", "path", "version", "sha512", "install"],
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "description": "The binary that ran.", "type": "string" },
+        "version": { "description": "What the binary reports as its version; empty when it reports none.", "type": "string" },
+        "sha512": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha512" }] },
+        "install": {
+          "description": "How the orb installed the binary that ran, from the record its install command left beside it. null when there is none, or when it describes another binary than the one that ran.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["tool", "version", "arch", "method", "verify_checksums"],
+              "properties": {
+                "tool": { "type": "string" },
+                "version": { "type": "string" },
+                "arch": { "enum": ["amd64", "arm64"] },
+                "method": {
+                  "description": "prebuilt: a release binary or archive, verified against the orb's checksum table. source-built: built from the module with the Go release build_go_version names, reproducibly, and the binary verified against the table.",
+                  "enum": ["prebuilt", "source-built"]
+                },
+                "asset": { "description": "The file that was verified: the release asset, or the binary the build produced.", "type": "string" },
+                "asset_sha512": { "description": "The SHA-512 the orb's checksum table lists for it; empty when it was not verified.", "type": "string" },
+                "verify_checksums": { "enum": ["strict", "known_versions", "false"] },
+                "build_go_version": { "description": "The Go release a source-built tool was built with; empty for a prebuilt one.", "type": "string" }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

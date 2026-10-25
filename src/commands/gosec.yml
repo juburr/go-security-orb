@@ -1,0 +1,175 @@
+description: >
+  Runs gosec, static security analysis for Go, in each module, on the
+  packages the go command selects, and writes its findings as SARIF
+  (<report_name>.sarif) and JSON (<report_name>.json). #nosec comments are
+  honored, and reported with their justifications; require_suppression_reasons
+  counts one without a justification as a finding. The step fails on
+  findings, unless report_only is true; it always fails when gosec can't
+  complete, such as for code that doesn't compile, which would leave rules
+  that need type information unchecked.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: modules are relative to it.
+  modules:
+    type: string
+    default: "."
+    description: >
+      The modules to check: directories that hold a go.mod, relative to
+      working_dir, separated by commas or spaces; or all, for every module in
+      working_dir and below it, skipping vendor and testdata directories and
+      those whose names start with "." or "_", as go ./... patterns do.
+      Environment variables are expanded.
+  packages:
+    type: string
+    default: "./..."
+    description: >
+      The package patterns to check in each module, separated by commas or
+      spaces. The go command resolves them, so ./... skips testdata, vendor
+      and nested modules, which gosec's own ./... would scan. Environment
+      variables are expanded.
+  tags:
+    type: string
+    default: ""
+    description: >
+      Build tags, separated by commas, for both choosing the files and
+      type-checking them. Environment variables are expanded.
+  tests:
+    type: boolean
+    default: false
+    description: >
+      Also check _test.go files. A finding in a file both builds see is
+      reported once.
+  exclude_generated:
+    type: boolean
+    default: true
+    description: >
+      Skip files with a "Code generated ... DO NOT EDIT." comment.
+  severity:
+    type: enum
+    enum: ["low", "medium", "high"]
+    default: low
+    description: >
+      Report only findings of this severity or higher.
+  confidence:
+    type: enum
+    enum: ["low", "medium", "high"]
+    default: low
+    description: >
+      Report only findings gosec is at least this confident about.
+  include:
+    type: string
+    default: ""
+    description: >
+      Run only these rules, such as G101,G401, separated by commas or spaces.
+      Empty runs every rule. Environment variables are expanded.
+  exclude:
+    type: string
+    default: ""
+    description: >
+      Skip these rules, such as G104, separated by commas or spaces. They are
+      reported as suppressed (external), not as findings. Environment
+      variables are expanded.
+  config:
+    type: string
+    default: ""
+    description: >
+      A gosec configuration file (-conf), relative to working_dir, for rule
+      settings such as G101's patterns. Environment variables are expanded.
+  require_suppression_reasons:
+    type: boolean
+    default: false
+    description: >
+      Count each #nosec or //gosec:disable comment without a justification
+      (#nosec G401 -- why it is safe) as a finding, so every suppression in
+      the code says why.
+  sarif:
+    type: boolean
+    default: true
+    description: >
+      Write gosec's SARIF report, with every module's results in one file
+      and paths relative to working_dir, for code scanning tools.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More gosec arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      Options that change the reports or their format (-fmt, -out, -stdout,
+      -verbose, -quiet, -no-fail, -track-suppressions) are refused.
+  output_dir:
+    type: string
+    default: /tmp/go-security-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: gosec
+    description: >
+      The reports' file name, without extension: <report_name>.json,
+      <report_name>.sarif, <report_name>.run-record.json and
+      junit/<report_name>.xml. Give each run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one failing test case per finding, and show it in
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which go.mod and go.sum, with which tools and settings, and what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A gosec that can't complete still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under go-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: gosec
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_CONFIG: << parameters.config >>
+        PARAM_CONFIDENCE: << parameters.confidence >>
+        PARAM_EXCLUDE: << parameters.exclude >>
+        PARAM_EXCLUDE_GENERATED: << parameters.exclude_generated >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_INCLUDE: << parameters.include >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MODULES: << parameters.modules >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_REQUIRE_SUPPRESSION_REASONS: << parameters.require_suppression_reasons >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SARIF: << parameters.sarif >>
+        PARAM_SEVERITY: << parameters.severity >>
+        PARAM_TAGS: << parameters.tags >>
+        PARAM_TESTS: << parameters.tests >>
+        SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
+      command: << include(scripts/gosec.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: go-security-reports
+            when: always
