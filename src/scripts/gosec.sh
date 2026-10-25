@@ -107,12 +107,15 @@ OPTIONS+=(${GS_WORDS[@]+"${GS_WORDS[@]}"})
 
 # Which files go list counts: with tests, a package of test files alone has
 # something to check; without, gosec would be handed no files for it, and
-# check the module's root package again instead.
+# check the module's root package again instead. With -e, go list reports a
+# pattern it can't resolve, such as a directory that isn't there, as a
+# package with an Error instead of failing, so each line says which it is.
+FILES='or .GoFiles .CgoFiles'
 if [[ "${TESTS}" == true ]]; then
-    TEMPLATE='{{if or .GoFiles .CgoFiles .TestGoFiles .XTestGoFiles}}{{.Dir}}{{end}}'
-else
-    TEMPLATE='{{if or .GoFiles .CgoFiles}}{{.Dir}}{{end}}'
+    FILES='or .GoFiles .CgoFiles .TestGoFiles .XTestGoFiles'
 fi
+TAB=$'\t'
+TEMPLATE="{{if .Error}}E${TAB}{{.ImportPath}}: {{.Error.Err}}{{else if ${FILES}}}D${TAB}{{.Dir}}{{end}}"
 LIST_ARGS=(list -find -e -f "${TEMPLATE}")
 if [[ -n "${TAGS}" ]]; then
     LIST_ARGS+=("-tags=${TAGS}")
@@ -138,9 +141,24 @@ for module in "${GS_MODULES[@]}"; do
         gs_tail "${WORK}/list.err"
         continue
     fi
+    # A package that only builds for another platform, or other tags, has
+    # nothing to check here, and neither has ./... in a module without
+    # packages; any other error, or another pattern that matches nothing,
+    # would leave code unchecked.
+    problems=$({
+        sed -n "s/^E${TAB}//p" "${WORK}/dirs" | grep -v ': build constraints exclude all Go files in '
+        grep -F 'matched no packages' "${WORK}/list.err" | grep -vF '"./..." matched no packages'
+    } || true)
+    if [[ -n "${problems}" ]]; then
+        ERRORS+=("${module}")
+        echo "ERROR: go list could not find some of the packages to check in ${label} (${GS_PACKAGES[*]}):" >&2
+        awk '{ print "  " $0 }' <<< "${problems}" >&2
+        continue
+    fi
     DIRS=()
     while IFS= read -r dir; do
-        [[ -n "${dir}" ]] || continue
+        [[ "${dir}" == "D${TAB}"* ]] || continue
+        dir=${dir#"D${TAB}"}
         if [[ "${dir}" == "${root}" || "${dir}" == "${physical}" ]]; then
             DIRS+=(./)
         elif [[ "${dir}" == "${root}/"* ]]; then
@@ -232,7 +250,8 @@ if [[ "${SARIF}" == true ]]; then
     # shellcheck disable=SC2016 # jq program, not shell
     jq '{version: "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
          runs: (if length == 0 then [{tool: {driver: {name: "gosec", informationUri: "https://github.com/securego/gosec", rules: []}}, results: []}]
-                else [.[0] + {tool: (.[0].tool | .driver.rules = ([.[] | .tool.driver.rules // [] | .[]] | unique_by(.id))),
+                else ([.[] | .tool.driver.rules // [] | .[]] | unique_by(.id)) as $rules
+                | [.[0] + {tool: (.[0].tool | .driver.rules = $rules),
                     results: ([.[] | .results // [] | .[]]
                         | unique_by([.ruleId, (.locations[0].physicalLocation.artifactLocation.uri // ""),
                             (.locations[0].physicalLocation.region.startLine // 0), (.locations[0].physicalLocation.region.startColumn // 0)]))}]

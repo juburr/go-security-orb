@@ -805,7 +805,8 @@ gs_vuln_sarif() {
             | if $accepted[.ruleId] then .suppressions = [{kind: "external", justification: $accepted[.ruleId]}] else . end))]
         | {version: "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
            runs: (if length == 0 then [{tool: {driver: {name: "govulncheck", informationUri: "https://golang.org/x/vuln", rules: []}}, results: []}]
-                  else [.[0] + {tool: (.[0].tool | .driver.rules = ([.[] | .tool.driver.rules // [] | .[]] | unique_by(.id))),
+                  else ([.[] | .tool.driver.rules // [] | .[]] | unique_by(.id)) as $rules
+                  | [.[0] + {tool: (.[0].tool | .driver.rules = $rules),
                       results: [.[] | .results // [] | .[]]}] end)}' "${@:3}"
 }
 

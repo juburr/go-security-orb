@@ -250,7 +250,7 @@ EOF
 } > "${STUBS}/govulncheck"
 
 # go-licenses: report prints one row per library, as the orb's template
-# asks: the module's own (MIT) and golang.org/x/text, whose license
+# asks: the module's own two packages (MIT) and golang.org/x/text, whose license
 # STUB_LICENSES picks: ok (BSD-3-Clause, the default), gpl (GPL-3.0) or
 # unknown. noown leaves out the module's own row, as a go-licenses that took
 # it for the standard library does, garbled prints a row it can't have
@@ -277,6 +277,7 @@ case "${STUB_LICENSES:-ok}" in
 esac
 if [[ "${STUB_LICENSES:-ok}" != noown ]]; then
     printf '%s\tUnknown\tMIT\t%s/LICENSE\tUnknown\n' "${own}" "${PWD}"
+    printf '%s/cmd/server\tUnknown\tMIT\t%s/LICENSE\tUnknown\n' "${own}" "${PWD}"
 fi
 printf 'golang.org/x/text\tv0.3.5\t%s\t%s/golang.org/x/text@v0.3.5/LICENSE\thttps://cs.opensource.google/go/x/text/+/v0.3.5:LICENSE\n' \
     "${license}" "${GOMODCACHE:-/nowhere}"
@@ -336,6 +337,7 @@ check "gosec ran on the package directory go list found" called_with gosec -fmt=
 check "the JSON report counts one finding" json_is "${OUT}/gosec.json" '[.[] | select(.finding)] | length' 1
 check "with the path relative to working_dir" json_is "${OUT}/gosec.json" '.[0].file' etag.go
 check "the SARIF has both results" json_is "${OUT}/gosec.sarif" '.runs[0].results | length' 2
+check "and the rule they belong to" json_is "${OUT}/gosec.sarif" '[.runs[0].tool.driver.rules[].id] | join(",")' G401
 check "JUnit has the finding" file_has "${OUT}/junit/gosec.xml" 'failures="1"'
 run gosec "working_dir=${WEAK}" report_only=true
 check "report_only passes" succeeded
@@ -363,6 +365,27 @@ check "extra_args can't change the report format" said "extra_args can't set -fm
 run gosec "working_dir=${CLEAN}" config=nothere.json -- STUB_GOSEC=clean
 check "a config that isn't there fails" said "config names nothere.json, which is not a file"
 
+begin "gosec: packages go list can't find fail, before gosec runs"
+cp -R "${CLEAN}" "${WORK}/platform"
+mkdir -p "${WORK}/platform/win"
+printf '//go:build windows\n\npackage win\n' > "${WORK}/platform/win/win.go"
+run gosec "working_dir=${WORK}/platform" packages=./missing report_only=true -- STUB_GOSEC=clean
+check "a directory that isn't there fails" said "go list could not find some of the packages to check in example.com/clean"
+check "naming it" said "./missing: stat"
+check "and gosec never ran" not_called_with gosec -fmt=sarif
+run gosec "working_dir=${WORK}/platform" "packages=./... ./missing" -- STUB_GOSEC=clean
+check "even beside packages it finds" failed
+run gosec "working_dir=${WORK}/platform" "packages=./cmd/..." -- STUB_GOSEC=clean
+check "a pattern for a directory that isn't there fails" said "./cmd/...: pattern ./cmd/...: lstat ./cmd/: no such file or directory"
+mkdir -p "${WORK}/platform/docs"
+echo notes > "${WORK}/platform/docs/README.md"
+run gosec "working_dir=${WORK}/platform" "packages=./docs/..." -- STUB_GOSEC=clean
+check "a pattern that matches no packages fails" failed
+check "saying so" said '"./docs/..." matched no packages'
+run gosec "working_dir=${WORK}/platform" packages=./win -- STUB_GOSEC=clean
+check "a package that only builds on another platform has nothing to check" succeeded
+check "saying so" said "No packages to check in example.com/clean (./win)"
+
 begin "gosec: a gosec that can't complete fails whatever report_only says"
 run gosec "working_dir=${WEAK}" report_only=true -- STUB_GOSEC=golangerrors
 check "type-check errors fail" failed
@@ -381,6 +404,7 @@ check "and where it is called" said "called from example.com/vulnerable.main (ma
 check "govulncheck ran with the options" called_with govulncheck -format json -scan=symbol -db=https://vuln.go.dev ./...
 check "the report counts one" json_is "${OUT}/govulncheck.json" '[.scans[].vulnerabilities[] | select(.counts)] | length' 1
 check "SARIF is written" json_is "${OUT}/govulncheck.sarif" '.runs[0].results | map(.ruleId) | index("GO-2021-0113") != null' true
+check "with govulncheck's rules" json_is "${OUT}/govulncheck.sarif" '[.runs[0].tool.driver.rules[].id] | index("GO-2021-0113") != null' true
 check "OpenVEX names the module as the product" json_is "${OUT}/govulncheck.openvex.json" \
     '[.statements[] | select(.vulnerability.name == "GO-2021-0113") | .products[0]."@id"] | first' pkg:golang/example.com/vulnerable
 check "govulncheck's own output is kept" json_is "${OUT}/govulncheck.raw.json" '.[0].messages | length > 0' true
@@ -419,6 +443,10 @@ check "showing its output" said "there are errors in the packages"
 check "the run record says error" json_is "${OUT}/govulncheck.run-record.json" .outcome error
 run vulncheck "working_dir=${CLEAN}" -- GOFLAGS=-mod=mod
 check "GOFLAGS=-mod=mod is refused" said "GOFLAGS has -mod=mod"
+printf 'GOFLAGS=-mod=mod\n' > "${WORK}/goenv-modmod"
+run vulncheck "working_dir=${CLEAN}" -- "GOENV=${WORK}/goenv-modmod"
+check "and so is -mod=mod that go env -w saved" said "GOFLAGS has -mod=mod"
+check "before govulncheck runs" call_count govulncheck 0
 run vulncheck "working_dir=${CLEAN}" go_version=1.27
 check "go_version sets GOVERSION" succeeded
 check "and the check says so" said "The standard library was checked as go1.27.3"
@@ -476,6 +504,9 @@ check "go-licenses ran report with the orb's template" called_with go-licenses r
 check "with the GOROOT of the go that runs in the module" called_with go-licenses "GOROOT=$(cd "${VULNERABLE}" && "${REAL_GO}" env GOROOT)"
 check "the module's own package is its own" json_is "${OUT}/licenses.json" '[.[] | select(.name == "example.com/vulnerable") | .status] | first' own
 check "the CSV lists the dependency" file_has "${OUT}/licenses.csv" '"golang.org/x/text","v0.3.5","BSD-3-Clause","allowed"'
+check "and so are packages below its path" json_is "${OUT}/licenses.json" '[.[] | select(.name == "example.com/vulnerable/cmd/server") | .status] | first' own
+run licenses "working_dir=${VULNERABLE}" allowed_licenses=BSD-3-Clause
+check "so the module's own license needn't be on the list" succeeded
 run licenses "working_dir=${VULNERABLE}" allowed_licenses=MIT
 check "a license not on the list fails" failed
 check "naming it" said "golang.org/x/text@v0.3.5: BSD-3-Clause (not in allowed_licenses)"

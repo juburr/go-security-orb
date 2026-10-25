@@ -59,9 +59,16 @@ gs_ignore "${PARAM_IGNORE}"
 GS_VULN_LEVEL=$(gs_vuln_level "${PARAM_SCAN}")
 gs_modules "${PARAM_MODULES}"
 gs_packages "${PARAM_PACKAGES}"
-if [[ " ${GOFLAGS:-} " =~ [[:space:]]-mod=mod[[:space:]] ]]; then
-    echo "ERROR: GOFLAGS has -mod=mod, which lets go list change go.mod during the scan, so govulncheck could" >&2
-    echo "  scan module versions you don't build with. Remove it from GOFLAGS." >&2
+# The flags go applies: the environment's GOFLAGS, or else what go env -w
+# saved in Go's environment file.
+if ! EFFECTIVE_GOFLAGS=$(go env GOFLAGS 2> /dev/null); then
+    echo "ERROR: go env could not report GOFLAGS in $(pwd)." >&2
+    exit 1
+fi
+if [[ " ${EFFECTIVE_GOFLAGS} " =~ [[:space:]]--?mod=mod[[:space:]] ]]; then
+    echo "ERROR: GOFLAGS has -mod=mod (${EFFECTIVE_GOFLAGS}), which lets go list change go.mod during the scan, so" >&2
+    echo "  govulncheck could scan module versions you don't build with. Remove it from GOFLAGS, or from Go's" >&2
+    echo "  environment file with go env -u GOFLAGS if go env -w set it." >&2
     exit 1
 fi
 

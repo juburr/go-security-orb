@@ -168,7 +168,7 @@ jq -s --argjson allowed "$(printf '%s\n' "${ALLOWED[@]}" | jq -R 'ascii_downcase
            licenses: ([.[].license] | unique), platforms: ([.[].platform] | unique), modules: ([.[].module] | unique),
            license_path: ([.[].license_path | select(. != "Unknown")] | first // null),
            license_url: ([.[].license_url | select(. != "Unknown")] | first // null),
-           own: any($main[]; $name == . or ($name | startswith(. + "/")))}
+           own: any($main[]; . as $mod | $name == $mod or ($name | startswith($mod + "/")))}
         | .status = (if .own and ($check_main | not) then "own"
             elif any(.licenses[]; . == "Unknown") then "unknown"
             elif all(.licenses[]; ascii_downcase as $l | any($allowed[]; . == $l)) then "allowed"
