@@ -1,0 +1,32 @@
+description: >
+  Gate FIPS 140-3 builds: build with GOFIPS140 so the binary links the
+  validated Go Cryptographic Module, then fail the job unless every binary
+  does, defaults to FIPS 140-3 mode, was built without cgo and links no
+  cryptography from outside the standard library that hasn't been reviewed.
+  The run record, with each binary's SHA-256 and settings, is the evidence
+  for an assessment. fips_test runs the tests in FIPS 140-3 only mode and
+  reports the algorithms the mode refuses, without failing, until they pass.
+
+usage:
+  version: 2.1
+  orbs:
+    go-security: juburr/go-security-orb@0.1.0
+  jobs:
+    fips:
+      docker:
+        - image: cimg/go:1.27
+      steps:
+        - checkout
+        - go-security/fips_test
+        - run:
+            name: Build For FIPS 140-3
+            command: GOFIPS140=v1.0.0 CGO_ENABLED=0 go build -o dist/server ./cmd/server
+        - go-security/fips_bin:
+            binaries: dist/server
+            require_cgo_disabled: true
+            allowed_crypto_modules: |
+              golang.org/x/crypto only ssh host keys, outside the FIPS boundary by policy
+  workflows:
+    fips:
+      jobs:
+        - fips

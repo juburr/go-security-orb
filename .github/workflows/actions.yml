@@ -1,0 +1,323 @@
+# Tests the GitHub Actions in actions/ on GitHub's own runners, as
+# .circleci/test-deploy.yml tests the orb's commands on CircleCI. Each job
+# runs the actions from this checkout (uses: ./actions/...), so a pull
+# request tests its own changes.
+name: GitHub Actions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the actions tests
+        run: bash tests/actions_test.sh
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # e_machine field of the ELF header: 3e00 is x86-64, b700 is aarch64.
+          # Quoted, since YAML reads an unquoted 3e00 as the number 3.
+          - runner: ubuntu-24.04
+            arch: amd64
+            elf: "3e00"
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            elf: "b700"
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: go govulncheck gosec go-licenses
+      - name: Verify the install
+        env:
+          ARCH: ${{ matrix.arch }}
+          ELF: ${{ matrix.elf }}
+        run: |
+          default() { yq ".parameters.${1//-/_}_version.default" src/commands/install.yml; }
+          [[ "$(command -v go)" == "${HOME}/sdk/go/bin/go" ]]
+          [[ "$(go env GOVERSION)" == "go$(default go)" ]]
+          gosec -version | grep -qx "Version: $(default gosec)"
+          for tool in govulncheck gosec go-licenses; do
+            binary=$(command -v "${tool}")
+            [[ "${binary}" == "${HOME}/.go-security-orb/bin/${tool}" ]]
+            od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n' | grep -Fx "${ELF}"
+            entry=$(grep -F "[\"$(default "${tool}")/${ARCH}\"]=" "src/install/${tool}/install.sh" | tail -n 1 | cut -d'"' -f4)
+            [[ "$(sha512sum "${binary}" | awk '{ print $1 }')" == "${entry}" ]] || { echo "${tool} is not the pinned binary."; exit 1; }
+          done
+      # The first install saved each tool to the cache, so this one restores
+      # it. It goes to a directory of its own, which later steps find first
+      # on the PATH.
+      - uses: ./actions/install_gosec
+        with:
+          install_path: ${{ runner.temp }}/second
+      - name: Verify the second install comes first on the PATH
+        env:
+          SECOND: ${{ runner.temp }}/second
+        run: |
+          [[ "$(command -v gosec)" == "${SECOND}/gosec" ]]
+          gosec -version | grep -q '^Version: '
+      - name: Install an unlisted version, which must fail
+        id: unlisted
+        continue-on-error: true
+        uses: ./actions/install_govulncheck
+        with:
+          version: 1.1.4
+          caching: false
+          install_path: ${{ runner.temp }}/unlisted
+      - name: Verify it failed before installing anything
+        env:
+          OUTCOME: ${{ steps.unlisted.outcome }}
+          UNLISTED: ${{ runner.temp }}/unlisted
+        run: |
+          [[ "${OUTCOME}" == failure ]]
+          [[ ! -e "${UNLISTED}/govulncheck" ]]
+
+  # A fresh runner with every download host blocked installs from the cache
+  # the install job saved, which only works if the cache is used, for the
+  # tools it builds as well as those it downloads.
+  install-from-cache:
+    needs: install
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Block the download hosts
+        run: |
+          hosts="github.com objects.githubusercontent.com release-assets.githubusercontent.com dl.google.com go.dev proxy.golang.org"
+          echo "127.0.0.1 ${hosts}" | sudo tee -a /etc/hosts
+          for host in github.com dl.google.com proxy.golang.org; do
+            if curl -sSf --max-time 10 -o /dev/null "https://${host}"; then
+              echo "${host} is still reachable."
+              exit 1
+            fi
+          done
+      - uses: ./actions/install
+        with:
+          tools: go govulncheck gosec go-licenses
+      - name: Verify the install
+        run: |
+          go version
+          gosec -version
+          go version -m "$(command -v govulncheck)" | grep -q 'golang.org/x/vuln'
+          go version -m "$(command -v go-licenses)" | grep -q 'github.com/google/go-licenses'
+
+  # Every check passes on the clean fixture, on both architectures.
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: go govulncheck gosec go-licenses
+      - uses: ./actions/mod_verify
+        with:
+          working_dir: tests/fixtures
+          modules: all
+          run_record: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/gosec
+        with:
+          working_dir: tests/fixtures/clean
+          tests: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/vulncheck
+        with:
+          working_dir: tests/fixtures/clean
+          run_record: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/licenses
+        with:
+          working_dir: tests/fixtures
+          modules: clean,vulnerable
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/fips_test
+        with:
+          working_dir: tests/fixtures/clean
+          report_only: "false"
+          output_dir: ${{ runner.temp }}/reports
+      - name: Build for FIPS 140-3
+        env:
+          BIN: ${{ runner.temp }}/bin
+        run: |
+          mkdir -p "${BIN}"
+          cd tests/fixtures/clean
+          GOFIPS140=v1.0.0 CGO_ENABLED=0 go build -o "${BIN}/clean" .
+      - uses: ./actions/fips_bin
+        with:
+          binaries: ${{ runner.temp }}/bin/clean
+          require_cgo_disabled: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/vulncheck_bin
+        with:
+          binaries: ${{ runner.temp }}/bin/clean
+          output_dir: ${{ runner.temp }}/reports
+      - name: Verify the reports
+        env:
+          REPORTS: ${{ runner.temp }}/reports
+        run: |
+          cd "${REPORTS}"
+          jq -e '[.modules[].checks[] | select(.status == "failed" or .status == "error")] | length == 0' mod-verify.json
+          jq -e '.ci.provider == "github-actions" and (.ci.build_url | test("/actions/runs/"))' mod-verify.run-record.json
+          jq -e 'length == 0' gosec.json
+          jq -e '[.scans[].vulnerabilities[] | select(.counts)] | length == 0' govulncheck.json govulncheck-bin.json
+          jq -e '.vuln_db.url == "https://vuln.go.dev"' govulncheck.run-record.json
+          jq -e '[.[] | select(.name == "golang.org/x/text") | .status] == ["allowed"]' licenses.json
+          jq -e '.modules[0].tests.failed == 0' fips-test.json
+          jq -e '.binaries[0].gofips140 == "v1.0.0-c2097c7c" and .binaries[0].fips140 == "on"' fips-bin.json
+          # mod_verify exported GOTOOLCHAIN=local through GITHUB_ENV.
+          [[ "${GOTOOLCHAIN}" == local ]]
+          [[ -z "$(git status --porcelain)" ]] || { git status; echo "A check changed the checkout."; exit 1; }
+
+  # Each check finds what is wrong with the vulnerable and weakcrypto
+  # fixtures: by default the step fails, and with report_only it passes.
+  findings:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: go govulncheck gosec go-licenses
+      - name: vulncheck, which must fail
+        id: vulncheck
+        continue-on-error: true
+        uses: ./actions/vulncheck
+        with:
+          working_dir: tests/fixtures/vulnerable
+          output_dir: ${{ runner.temp }}/reports
+      - name: gosec, which must fail
+        id: gosec
+        continue-on-error: true
+        uses: ./actions/gosec
+        with:
+          working_dir: tests/fixtures/weakcrypto
+          output_dir: ${{ runner.temp }}/reports
+      - name: licenses, which must fail
+        id: licenses
+        continue-on-error: true
+        uses: ./actions/licenses
+        with:
+          working_dir: tests/fixtures/vulnerable
+          allowed_licenses: MIT
+          output_dir: ${{ runner.temp }}/reports
+      - name: fips_test, which must fail
+        id: fips-test
+        continue-on-error: true
+        uses: ./actions/fips_test
+        with:
+          working_dir: tests/fixtures/weakcrypto
+          report_only: "false"
+          output_dir: ${{ runner.temp }}/reports
+      - name: Build the vulnerable fixture
+        env:
+          BIN: ${{ runner.temp }}/bin
+        run: |
+          mkdir -p "${BIN}"
+          cd tests/fixtures/vulnerable
+          go build -o "${BIN}/vulnerable" .
+      - name: vulncheck_bin, which must fail
+        id: vulncheck-bin
+        continue-on-error: true
+        uses: ./actions/vulncheck_bin
+        with:
+          binaries: ${{ runner.temp }}/bin/vulnerable
+          output_dir: ${{ runner.temp }}/reports
+      - name: fips_bin, which must fail
+        id: fips-bin
+        continue-on-error: true
+        uses: ./actions/fips_bin
+        with:
+          binaries: ${{ runner.temp }}/bin/vulnerable
+          output_dir: ${{ runner.temp }}/reports
+      - name: Verify each failed, and reported what it found
+        env:
+          OUTCOMES: >-
+            ${{ steps.vulncheck.outcome }} ${{ steps.gosec.outcome }} ${{ steps.licenses.outcome }}
+            ${{ steps.fips-test.outcome }} ${{ steps.vulncheck-bin.outcome }} ${{ steps.fips-bin.outcome }}
+          REPORTS: ${{ runner.temp }}/reports
+        run: |
+          [[ "${OUTCOMES}" == "failure failure failure failure failure failure" ]]
+          cd "${REPORTS}"
+          jq -e 'any(.scans[].vulnerabilities[]; .id == "GO-2021-0113" and .level == "called")' govulncheck.json govulncheck-bin.json
+          jq -e '[.[] | select(.finding) | .rule_id] | sort == ["G401", "G501", "G505"]' gosec.json
+          jq -e '[.[] | select(.name == "golang.org/x/text") | .status] == ["not-allowed"]' licenses.json
+          jq -e '.refused | length == 2' fips-test.json
+          jq -e '[.binaries[0].checks[] | select(.status == "failed") | .check] == ["gofips140", "fips140"]' fips-bin.json
+      - uses: ./actions/vulncheck
+        with:
+          working_dir: tests/fixtures/vulnerable
+          report_only: "true"
+          report_name: govulncheck-report-only
+          output_dir: ${{ runner.temp }}/reports
+      # fips_test reports without failing by default.
+      - uses: ./actions/fips_test
+        with:
+          working_dir: tests/fixtures/weakcrypto
+          report_name: fips-test-report-only
+          output_dir: ${{ runner.temp }}/reports
+
+  # fetch_vuln_db fetches the database, and exports its location through
+  # GITHUB_ENV, which vulncheck then scans with after vuln.go.dev is blocked.
+  offline-db:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: go govulncheck
+      - uses: ./actions/fetch_vuln_db
+      - name: Block vuln.go.dev
+        run: |
+          echo "127.0.0.1 vuln.go.dev" | sudo tee -a /etc/hosts
+          if curl -sSf --max-time 10 -o /dev/null https://vuln.go.dev/index/db.json; then
+            echo "vuln.go.dev is still reachable."
+            exit 1
+          fi
+      - uses: ./actions/vulncheck
+        with:
+          working_dir: tests/fixtures/vulnerable
+          report_only: "true"
+          run_record: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - name: Verify the scan used the fetched copy
+        env:
+          REPORTS: ${{ runner.temp }}/reports
+        run: |
+          [[ "${GO_SECURITY_VULN_DB}" == "file://${HOME}/.cache/go-vulndb" ]]
+          jq -e 'any(.scans[].vulnerabilities[]; .id == "GO-2021-0113" and .counts)' "${REPORTS}/govulncheck.json"
+          jq -e '.vuln_db.fetched.source == "https://vuln.go.dev/vulndb.zip"' "${REPORTS}/govulncheck.run-record.json"

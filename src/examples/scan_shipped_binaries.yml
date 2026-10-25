@@ -1,0 +1,33 @@
+description: >
+  Scan the binaries you release, not only the source: every Go binary records
+  the Go release and module versions that built it, so vulncheck_bin checks
+  the standard library and modules each one really contains, with no source
+  and no build. Run it on the release artifacts, after the build.
+
+usage:
+  version: 2.1
+  orbs:
+    go-security: juburr/go-security-orb@0.1.0
+  jobs:
+    release:
+      docker:
+        - image: cimg/go:1.27
+      steps:
+        - checkout
+        - run:
+            name: Build
+            command: |
+              GOOS=linux GOARCH=amd64 go build -trimpath -o dist/linux-amd64/server ./cmd/server
+              GOOS=linux GOARCH=arm64 go build -trimpath -o dist/linux-arm64/server ./cmd/server
+        - go-security/install:
+            tools: govulncheck
+        - go-security/vulncheck_bin:
+            binaries: dist/*/server
+            run_record: true
+        - persist_to_workspace:
+            root: .
+            paths: [dist]
+  workflows:
+    release:
+      jobs:
+        - release

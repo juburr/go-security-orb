@@ -1,0 +1,93 @@
+description: >
+  Installs govulncheck, Go's vulnerability scanner, for Linux on amd64 or
+  arm64. golang.org/x/vuln publishes no binaries, so govulncheck is built
+  from source with a pinned Go release (this job's go when it is that
+  release, otherwise one downloaded and verified first), and the binary is
+  checked against this orb's SHA-512 checksum table, since Go builds are
+  reproducible. The vulncheck and vulncheck_bin commands need it. It
+  type-checks code with the Go it was built with, Go 1.27.3, so it can scan
+  code with any go up to Go 1.27 on the PATH.
+parameters:
+  caching:
+    type: boolean
+    default: true
+    description: >
+      Cache the verified binary between jobs, keyed by version, CPU
+      architecture and home directory, so later jobs install it without
+      building it. Only verified binaries are cached, and a cached binary is
+      verified again before it is installed.
+  download_base_url:
+    type: string
+    default: ""
+    description: >
+      Base URL of an internal mirror of https://dl.google.com/go, such as an
+      Artifactory or Nexus remote repository, to download the Go release
+      that builds govulncheck from, when this job's go is not that release.
+      It replaces https://dl.google.com/go in the download URL, so the
+      mirror must serve the same file names. It must be an https:// URL,
+      without credentials (user:password@) or a query or fragment, which
+      would show in the log. What is downloaded is still verified against
+      this orb's checksum table. The modules govulncheck is built from come
+      through the job's GOPROXY. Environment variables are expanded.
+  install_path:
+    type: string
+    default: ""
+    description: >
+      Absolute path of the directory to install govulncheck into. It is
+      created if needed and added to the PATH of later steps when it isn't
+      already on it, and must be writable without root. Environment variables
+      are expanded. Defaults to $HOME/.go-security-orb/bin. Executor images
+      don't put that directory on the PATH, so it goes first, ahead of copies
+      an image ships, such as the govulncheck in cimg/go's ~/go/bin.
+  verify_checksums:
+    type: enum
+    enum: ["false", "known_versions", "strict"]
+    default: strict
+    description: >
+      SHA-512 verification against this orb's checksum table. "strict"
+      (default) fails before downloading anything when the version has no
+      checksum in the table. "known_versions" verifies listed versions and
+      installs unlisted versions unverified, with a warning. "false" skips
+      verification and is not recommended.
+  version:
+    type: string
+    default: "1.9.0"
+    description: >
+      Version of govulncheck to install, such as 1.9.0: a release of
+      golang.org/x/vuln. A leading "v" is ignored, and environment variables
+      are expanded.
+steps:
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        # The key is computed from a file that names the CPU (uname -m, as
+        # {{ arch }} also encodes the CPU model and would split the cache by
+        # host), HOME (a cache is restored to the absolute path it was saved
+        # from), and the version with environment variables expanded.
+        - run:
+            name: Prepare govulncheck cache key
+            environment:
+              ORB_CACHE_KEY_FILE: /tmp/go-security-orb-govulncheck-cache-key
+              PARAM_VERSION: << parameters.version >>
+            command: << include(scripts/cache_key.sh) >>
+        # A saved cache can't be replaced. Bump v1 when an existing checksum
+        # table entry changes, so caches saved for the old bytes stop being
+        # restored.
+        - restore_cache:
+            key: go-security-orb-govulncheck-v1-<< parameters.version >>-{{ checksum "/tmp/go-security-orb-govulncheck-cache-key" }}
+  - run:
+      name: Install govulncheck << parameters.version >>
+      environment:
+        PARAM_CACHING: << parameters.caching >>
+        PARAM_DOWNLOAD_BASE_URL: << parameters.download_base_url >>
+        PARAM_INSTALL_PATH: << parameters.install_path >>
+        PARAM_VERIFY_CHECKSUMS: << parameters.verify_checksums >>
+        PARAM_VERSION: << parameters.version >>
+      command: << include(install/govulncheck/install.sh) >>
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        - save_cache:
+            key: go-security-orb-govulncheck-v1-<< parameters.version >>-{{ checksum "/tmp/go-security-orb-govulncheck-cache-key" }}
+            paths:
+              - ~/.cache/go-security-orb-govulncheck

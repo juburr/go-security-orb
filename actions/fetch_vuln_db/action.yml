@@ -1,0 +1,58 @@
+name: Fetch the Go vulnerability database
+description: >
+  Fetches a copy of the Go vulnerability database for vulncheck and
+  vulncheck_bin, from vuln.go.dev's bulk download, an internal mirror of it,
+  or a zip or directory a previous job staged, checks it, and exports its
+  file:// URL in db_env_var for later steps. Persist path to a workspace, or
+  cache it, to scan in jobs without network access to vuln.go.dev. The
+  database carries no signatures, so a copy is only as good as the HTTPS that
+  fetched it; sha256 pins a reviewed copy exactly. The GitHub Actions twin of
+  the orb's fetch_vuln_db command.
+author: juburr
+
+inputs:
+  db_env_var:
+    description: >
+      The environment variable to export the database's file:// URL in, for
+      later steps. vulncheck and vulncheck_bin read GO_SECURITY_VULN_DB when
+      their db parameter is empty.
+    default: GO_SECURITY_VULN_DB
+  max_db_age_days:
+    description: >
+      Fail when the database was last modified more than this many days ago,
+      as a mirror that stopped syncing serves. 0 means no limit.
+    default: "14"
+  path:
+    description: >
+      Absolute path of the directory to put the database in. It must be
+      missing, empty, or a copy this command put there before, which it
+      replaces. A leading ~/ is the home directory. Defaults to
+      $HOME/.cache/go-vulndb.
+    default: ""
+  sha256:
+    description: >
+      The SHA-256 the zip must have, to use exactly a copy you reviewed. Empty
+      accepts whatever source serves, after checking its layout.
+    default: ""
+  source:
+    description: >
+      Where the database comes from: an https:// URL of a zip of it (such as
+      vuln.go.dev's bulk download, or an internal mirror of it), a local zip
+      file, or a local directory holding an unzipped copy, relative to the
+      job's working directory or absolute.
+    default: https://vuln.go.dev/vulndb.zip
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch the Go vulnerability database
+      shell: bash
+      env:
+        PARAM_DB_ENV_VAR: ${{ inputs.db_env_var }}
+        PARAM_MAX_DB_AGE_DAYS: ${{ inputs.max_db_age_days }}
+        PARAM_PATH: ${{ inputs.path }}
+        PARAM_SHA256: ${{ inputs.sha256 }}
+        PARAM_SOURCE: ${{ inputs.source }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/fetch_vuln_db.sh"
+        "SCRIPT_GO_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/go_security.sh"

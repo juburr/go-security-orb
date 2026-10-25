@@ -1,0 +1,142 @@
+name: Check Go licenses
+description: >
+  Finds the license of every dependency each module's packages build with,
+  using go-licenses, and checks them against allowed_licenses. It writes the
+  inventory as CSV (<report_name>.csv) and JSON (<report_name>.json). A
+  dependency whose license go-licenses can't find or identify counts as not
+  allowed. The step fails on dependencies that aren't allowed, unless
+  report_only is true; it always fails when go-licenses can't complete, or
+  reports none of the module's own packages, which would mean it checked
+  nothing. The GitHub Actions twin of the orb's licenses command.
+author: juburr
+
+inputs:
+  allowed_licenses:
+    description: >
+      The licenses dependencies may have, as SPDX identifiers separated by
+      commas or spaces, such as Apache-2.0,MIT,MPL-2.0. A dependency with
+      several licenses needs every one of them on the list. Matching ignores
+      case.
+    default: Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,MIT
+  check_main_module:
+    description: >
+      Also check the licenses of the modules being checked themselves. They
+      are always in the inventory.
+    default: "false"
+  ignore:
+    description: >
+      Package path prefixes to leave out, separated by commas or spaces, such
+      as your organization's own modules. go-licenses matches them as plain
+      prefixes, so example.com/foo also leaves out example.com/foobar.
+    default: ""
+  include_tests:
+    description: >
+      Also check the dependencies of the packages' tests.
+    default: "false"
+  junit:
+    description: >
+      Also write JUnit XML, one failing test case per dependency that isn't
+      allowed, for a JUnit reader such as a test report action.
+    default: "true"
+  modules:
+    description: >
+      The modules to check: directories that hold a go.mod, relative to
+      working_dir, separated by commas or spaces; or all, for every module in
+      working_dir and below it, skipping vendor and testdata directories and
+      those whose names start with "." or "_", as go ./... patterns do.
+    default: .
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/go-security-reports
+  packages:
+    description: >
+      The package patterns whose dependencies to check in each module,
+      separated by commas or spaces: the packages you ship, such as ./cmd/...,
+      leave out what only tools and tests use.
+    default: ./...
+  platforms:
+    description: >
+      The GOOS/GOARCH platforms you ship, such as linux/amd64 windows/amd64
+      darwin/arm64, separated by commas or spaces. A dependency only one of
+      them imports is checked too. Empty checks this machine's platform.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.csv,
+      <report_name>.json, <report_name>.run-record.json and
+      junit/<report_name>.xml. Give each run of this command in a job its own.
+    default: licenses
+  report_only:
+    description: >
+      Report dependencies that aren't allowed without failing the step, to
+      adopt the check gradually. A go-licenses that can't complete still fails
+      it.
+    default: "false"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which go.mod and go.sum, with which tools and settings, and what it
+      found.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      go-security-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  tags:
+    description: >
+      Build tags, separated by commas, which decide what the packages import.
+    default: ""
+  working_dir:
+    description: >
+      Directory to run in: modules are relative to it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=go-security-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: go-licenses
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALLOWED_LICENSES: ${{ inputs.allowed_licenses }}
+        PARAM_CHECK_MAIN_MODULE: ${{ inputs.check_main_module }}
+        PARAM_IGNORE: ${{ inputs.ignore }}
+        PARAM_INCLUDE_TESTS: ${{ inputs.include_tests }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_MODULES: ${{ inputs.modules }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_PLATFORMS: ${{ inputs.platforms }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_TAGS: ${{ inputs.tags }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/licenses.sh"
+        "SCRIPT_GO_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/go_security.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

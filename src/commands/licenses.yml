@@ -1,0 +1,143 @@
+description: >
+  Finds the license of every dependency each module's packages build with,
+  using go-licenses, and checks them against allowed_licenses. It writes the
+  inventory as CSV (<report_name>.csv) and JSON (<report_name>.json). A
+  dependency whose license go-licenses can't find or identify counts as not
+  allowed. The step fails on dependencies that aren't allowed, unless
+  report_only is true; it always fails when go-licenses can't complete, or
+  reports none of the module's own packages, which would mean it checked
+  nothing.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: modules are relative to it.
+  modules:
+    type: string
+    default: "."
+    description: >
+      The modules to check: directories that hold a go.mod, relative to
+      working_dir, separated by commas or spaces; or all, for every module in
+      working_dir and below it, skipping vendor and testdata directories and
+      those whose names start with "." or "_", as go ./... patterns do.
+      Environment variables are expanded.
+  packages:
+    type: string
+    default: "./..."
+    description: >
+      The package patterns whose dependencies to check in each module,
+      separated by commas or spaces: the packages you ship, such as ./cmd/...,
+      leave out what only tools and tests use. Environment variables are
+      expanded.
+  allowed_licenses:
+    type: string
+    default: "Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,MIT"
+    description: >
+      The licenses dependencies may have, as SPDX identifiers separated by
+      commas or spaces, such as Apache-2.0,MIT,MPL-2.0. A dependency with
+      several licenses needs every one of them on the list. Matching ignores
+      case. Environment variables are expanded.
+  ignore:
+    type: string
+    default: ""
+    description: >
+      Package path prefixes to leave out, separated by commas or spaces, such
+      as your organization's own modules. go-licenses matches them as plain
+      prefixes, so example.com/foo also leaves out example.com/foobar.
+      Environment variables are expanded.
+  include_tests:
+    type: boolean
+    default: false
+    description: >
+      Also check the dependencies of the packages' tests.
+  tags:
+    type: string
+    default: ""
+    description: >
+      Build tags, separated by commas, which decide what the packages import.
+      Environment variables are expanded.
+  platforms:
+    type: string
+    default: ""
+    description: >
+      The GOOS/GOARCH platforms you ship, such as linux/amd64 windows/amd64
+      darwin/arm64, separated by commas or spaces. A dependency only one of
+      them imports is checked too. Empty checks this machine's platform.
+      Environment variables are expanded.
+  check_main_module:
+    type: boolean
+    default: false
+    description: >
+      Also check the licenses of the modules being checked themselves. They
+      are always in the inventory.
+  output_dir:
+    type: string
+    default: /tmp/go-security-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: licenses
+    description: >
+      The reports' file name, without extension: <report_name>.csv,
+      <report_name>.json, <report_name>.run-record.json and
+      junit/<report_name>.xml. Give each run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one failing test case per dependency that isn't
+      allowed, and show it in CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which go.mod and go.sum, with which tools and settings, and what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report dependencies that aren't allowed without failing the step, to
+      adopt the check gradually. A go-licenses that can't complete still fails
+      it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under go-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: go-licenses
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALLOWED_LICENSES: << parameters.allowed_licenses >>
+        PARAM_CHECK_MAIN_MODULE: << parameters.check_main_module >>
+        PARAM_IGNORE: << parameters.ignore >>
+        PARAM_INCLUDE_TESTS: << parameters.include_tests >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MODULES: << parameters.modules >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_PLATFORMS: << parameters.platforms >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_TAGS: << parameters.tags >>
+        SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
+      command: << include(scripts/licenses.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: go-security-reports
+            when: always

@@ -1,0 +1,37 @@
+description: >
+  Fetch the Go vulnerability database once, check that it is complete and
+  current, and scan with that copy in jobs that can't reach vuln.go.dev, such
+  as on self-hosted runners without internet access. Pin a reviewed copy with
+  sha256, or point source at an internal mirror of vulndb.zip.
+
+usage:
+  version: 2.1
+  orbs:
+    go-security: juburr/go-security-orb@0.1.0
+  jobs:
+    fetch-vuln-db:
+      docker:
+        - image: cimg/go:1.27
+      steps:
+        - go-security/fetch_vuln_db:
+            path: /tmp/workspace/vulndb
+        - persist_to_workspace:
+            root: /tmp/workspace
+            paths: [vulndb]
+    scan:
+      docker:
+        - image: cimg/go:1.27
+      steps:
+        - checkout
+        - attach_workspace:
+            at: /tmp/workspace
+        - go-security/install
+        - go-security/vulncheck:
+            db: /tmp/workspace/vulndb
+            run_record: true
+  workflows:
+    security:
+      jobs:
+        - fetch-vuln-db
+        - scan:
+            requires: [fetch-vuln-db]

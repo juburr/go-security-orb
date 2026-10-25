@@ -1,0 +1,34 @@
+description: >
+  Check a Go service for security on every push: install verified
+  govulncheck, gosec and go-licenses, check that every dependency is exactly
+  what go.mod and go.sum name, then look for reachable vulnerabilities, risky
+  code and licenses outside the allowlist. Findings fail the job; the reports
+  (SARIF, OpenVEX, JSON, CSV) are stored even when it fails, and JUnit
+  results show in the Tests tab.
+
+usage:
+  version: 2.1
+  orbs:
+    go-security: juburr/go-security-orb@0.1.0
+  jobs:
+    security:
+      docker:
+        - image: cimg/go:1.27
+      steps:
+        - checkout
+        - go-security/install:
+            tools: govulncheck gosec go-licenses
+        - go-security/mod_verify
+        - go-security/gosec:
+            require_suppression_reasons: true
+        - go-security/vulncheck:
+            go_version: go1.27.3
+            ignore: |
+              GO-2024-2687 the HTTP/2 server is never exposed; only the client is used
+        - go-security/licenses:
+            allowed_licenses: Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,MIT,MPL-2.0
+            platforms: linux/amd64 linux/arm64
+  workflows:
+    security:
+      jobs:
+        - security

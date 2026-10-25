@@ -1,0 +1,57 @@
+description: >
+  Fetches a copy of the Go vulnerability database for vulncheck and
+  vulncheck_bin, from vuln.go.dev's bulk download, an internal mirror of it,
+  or a zip or directory a previous job staged, checks it, and exports its
+  file:// URL in db_env_var for later steps. Persist path to a workspace, or
+  cache it, to scan in jobs without network access to vuln.go.dev. The
+  database carries no signatures, so a copy is only as good as the HTTPS
+  that fetched it; sha256 pins a reviewed copy exactly.
+parameters:
+  source:
+    type: string
+    default: "https://vuln.go.dev/vulndb.zip"
+    description: >
+      Where the database comes from: an https:// URL of a zip of it (such as
+      vuln.go.dev's bulk download, or an internal mirror of it), a local zip
+      file, or a local directory holding an unzipped copy, relative to the
+      job's working directory or absolute. Environment variables are
+      expanded.
+  path:
+    type: string
+    default: ""
+    description: >
+      Absolute path of the directory to put the database in. It must be
+      missing, empty, or a copy this command put there before, which it
+      replaces. A leading ~/ is the home directory. Defaults to
+      $HOME/.cache/go-vulndb. Environment variables are expanded.
+  sha256:
+    type: string
+    default: ""
+    description: >
+      The SHA-256 the zip must have, to use exactly a copy you reviewed.
+      Empty accepts whatever source serves, after checking its layout.
+      Environment variables are expanded.
+  max_db_age_days:
+    type: integer
+    default: 14
+    description: >
+      Fail when the database was last modified more than this many days ago,
+      as a mirror that stopped syncing serves. 0 means no limit.
+  db_env_var:
+    type: env_var_name
+    default: GO_SECURITY_VULN_DB
+    description: >
+      The environment variable to export the database's file:// URL in, for
+      later steps. vulncheck and vulncheck_bin read GO_SECURITY_VULN_DB when
+      their db parameter is empty.
+steps:
+  - run:
+      name: Fetch the Go vulnerability database
+      environment:
+        PARAM_DB_ENV_VAR: << parameters.db_env_var >>
+        PARAM_MAX_DB_AGE_DAYS: << parameters.max_db_age_days >>
+        PARAM_PATH: << parameters.path >>
+        PARAM_SHA256: << parameters.sha256 >>
+        PARAM_SOURCE: << parameters.source >>
+        SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
+      command: << include(scripts/fetch_vuln_db.sh) >>

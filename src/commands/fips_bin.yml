@@ -1,0 +1,137 @@
+description: >
+  Checks that each Go binary you ship was built for FIPS 140-3 the way Go's
+  native mode needs, from the build information every Go binary carries, and
+  writes the evidence (each binary's SHA-256, Go release and FIPS settings)
+  as JSON, JUnit and a run record. The step fails for a binary built with a
+  Go release older than min_go_version, without GOFIPS140 or with a
+  GOFIPS140 that gofips140 doesn't name (latest is the unvalidated in-tree
+  code), with FIPS 140-3 mode off by default (a go.mod godebug line can turn
+  it off), with cgo when require_cgo_disabled is true, or linking a
+  cryptography module outside the standard library that
+  allowed_crypto_modules doesn't accept with a reason, unless report_only is
+  true. It always fails for a file that isn't a Go binary with build
+  information. A passing binary still runs out of FIPS 140-3 mode if its
+  environment sets GODEBUG=fips140=off.
+parameters:
+  binaries:
+    type: string
+    description: >
+      The binaries to check: paths or glob patterns, such as bin/* or
+      dist/*/server, separated by commas or spaces, relative to working_dir.
+      A pattern that matches nothing fails the step. Environment variables are
+      expanded.
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: binaries are relative to it.
+  min_go_version:
+    type: string
+    default: "1.24"
+    description: >
+      The oldest Go release a binary may be built with, such as 1.24 or
+      1.25.2. Go 1.24 is the first with the native FIPS 140-3 mode.
+      Environment variables are expanded.
+  gofips140:
+    type: string
+    default: "v1.0.0 v1.0.0-c2097c7c"
+    description: >
+      The Go Cryptographic Module versions a binary may embed, as its build
+      information records GOFIPS140, separated by commas or spaces. The
+      default is v1.0.0, validated under CMVP certificate #5247, which Go 1.24
+      records as v1.0.0 and Go 1.25 and later as v1.0.0-c2097c7c. Add v1.26.0
+      to accept the version still in the CMVP's process. latest and off are
+      refused: they mean no validated module. Environment variables are
+      expanded.
+  fips140:
+    type: enum
+    enum: ["on", "only"]
+    default: "on"
+    description: >
+      The FIPS 140-3 mode a binary must default to (its DefaultGODEBUG):
+      on, or only, which also makes algorithms the mode doesn't allow fail.
+      Go's documentation says only is meant for testing, not production.
+  require_cgo_disabled:
+    type: boolean
+    default: false
+    description: >
+      Fail for a binary built with cgo (CGO_ENABLED=1): C code linked through
+      cgo can carry cryptography of its own, outside the Go Cryptographic
+      Module.
+  allowed_crypto_modules:
+    type: string
+    default: ""
+    description: >
+      Cryptography modules outside the standard library to accept, one per
+      line: the module path and the reason, such as "golang.org/x/crypto only
+      bcrypt, for passwords, outside the FIPS boundary by policy". A line
+      without a reason fails the step. Accepted modules stay in the reports,
+      marked as such. Environment variables are expanded.
+  output_dir:
+    type: string
+    default: /tmp/go-security-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: fips-bin
+    description: >
+      The reports' file name, without extension: <report_name>.json,
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each
+      run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one test case per check and binary, and show it
+      in CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: true
+    description: >
+      Also write a run record (<report_name>.run-record.json): which binaries
+      were checked, with their SHA-256, Go release and build settings, with
+      which go, and what it found, as evidence for an assessment.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report problems without failing the step, to adopt the check
+      gradually. A file that isn't a Go binary still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under go-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: Check FIPS 140-3 builds
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALLOWED_CRYPTO_MODULES: << parameters.allowed_crypto_modules >>
+        PARAM_BINARIES: << parameters.binaries >>
+        PARAM_FIPS140: << parameters.fips140 >>
+        PARAM_GOFIPS140: << parameters.gofips140 >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_MIN_GO_VERSION: << parameters.min_go_version >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_REQUIRE_CGO_DISABLED: << parameters.require_cgo_disabled >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
+      command: << include(scripts/fips_bin.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: go-security-reports
+            when: always

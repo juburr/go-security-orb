@@ -1,0 +1,94 @@
+name: Install Go
+description: >
+  Installs Go from its official Linux release archive, for amd64 or arm64,
+  picked from the machine's CPU architecture, after verifying the archive's
+  SHA-512 checksum, without root. Images such as cimg/go already have Go; use
+  this on other images, such as a machine executor, or to run a verified Go
+  release. The orb's commands run whichever go comes first on the PATH, and Go
+  may still switch to a newer release a go.mod asks for, as its GOTOOLCHAIN
+  setting allows. The GitHub Actions twin of the orb's install_go command.
+author: juburr
+
+inputs:
+  caching:
+    description: >
+      Cache the downloaded release archive (about 70 MB) between jobs, keyed
+      by version, CPU architecture and home directory. Only verified archives
+      are cached, and a cached archive is verified again before it is
+      installed.
+    default: "true"
+  download_base_url:
+    description: >
+      Base URL of an internal mirror of https://dl.google.com/go, such as an
+      Artifactory or Nexus remote repository, to download the Go release
+      archive from. It replaces https://dl.google.com/go in the download URL,
+      so the mirror must serve the same file names. It must be an https://
+      URL, without credentials (user:password@) or a query or fragment, which
+      would show in the log. What is downloaded is still verified against this
+      orb's checksum table.
+    default: ""
+  install_path:
+    description: >
+      Absolute path of the directory to install Go into: the Go installation's
+      root (GOROOT), whose bin directory is added to the PATH of later steps
+      when it isn't already on it. It must be missing, hold no files, or be a
+      Go installation this command installed before, which it replaces, and be
+      writable without root. Defaults to $HOME/sdk/go.
+    default: ""
+  verify_checksums:
+    description: >
+      SHA-512 verification against this orb's checksum table. "strict"
+      (default) fails before downloading anything when the version has no
+      checksum in the table. "known_versions" verifies listed versions and
+      installs unlisted versions unverified, with a warning. "false" skips
+      verification and is not recommended.
+    default: strict
+  version:
+    description: >
+      Version of Go to install, such as 1.27.3, without the "go" prefix. A
+      leading "v" is ignored.
+    default: "1.27.3"
+
+runs:
+  using: composite
+  steps:
+    # The key is computed from a file that names the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and the
+    # version, as the orb's command computes it.
+    - name: Prepare Go cache key
+      id: cache-key
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/go-security-orb-go-cache-key
+        PARAM_VERSION: ${{ inputs.version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=go-security-orb-go-v1-%s\n' "$(sha256sum < "${ORB_CACHE_KEY_FILE}" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore Go cache
+      id: restore
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/go-security-orb-go
+        key: ${{ steps.cache-key.outputs.key }}
+    - name: Install Go
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/go/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # install, not at the end of the job.
+    - name: Save Go cache
+      if: (inputs.caching == 'true' || inputs.caching == '1') && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/go-security-orb-go
+        key: ${{ steps.cache-key.outputs.key }}

@@ -1,0 +1,169 @@
+name: Run gosec
+description: >
+  Runs gosec, static security analysis for Go, in each module, on the packages
+  the go command selects, and writes its findings as SARIF
+  (<report_name>.sarif) and JSON (<report_name>.json). #nosec comments are
+  honored, and reported with their justifications; require_suppression_reasons
+  counts one without a justification as a finding. The step fails on findings,
+  unless report_only is true; it always fails when gosec can't complete, such
+  as for code that doesn't compile, which would leave rules that need type
+  information unchecked. The GitHub Actions twin of the orb's gosec command.
+author: juburr
+
+inputs:
+  confidence:
+    description: >
+      Report only findings gosec is at least this confident about.
+    default: low
+  config:
+    description: >
+      A gosec configuration file (-conf), relative to working_dir, for rule
+      settings such as G101's patterns.
+    default: ""
+  exclude:
+    description: >
+      Skip these rules, such as G104, separated by commas or spaces. They are
+      reported as suppressed (external), not as findings.
+    default: ""
+  exclude_generated:
+    description: >
+      Skip files with a "Code generated ... DO NOT EDIT." comment.
+    default: "true"
+  extra_args:
+    description: >
+      More gosec arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      Options that change the reports or their format (-fmt, -out, -stdout,
+      -verbose, -quiet, -no-fail, -track-suppressions) are refused.
+    default: ""
+  include:
+    description: >
+      Run only these rules, such as G101,G401, separated by commas or spaces.
+      Empty runs every rule.
+    default: ""
+  junit:
+    description: >
+      Also write JUnit XML, one failing test case per finding, for a JUnit
+      reader such as a test report action.
+    default: "true"
+  modules:
+    description: >
+      The modules to check: directories that hold a go.mod, relative to
+      working_dir, separated by commas or spaces; or all, for every module in
+      working_dir and below it, skipping vendor and testdata directories and
+      those whose names start with "." or "_", as go ./... patterns do.
+    default: .
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/go-security-reports
+  packages:
+    description: >
+      The package patterns to check in each module, separated by commas or
+      spaces. The go command resolves them, so ./... skips testdata, vendor
+      and nested modules, which gosec's own ./... would scan.
+    default: ./...
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.json,
+      <report_name>.sarif, <report_name>.run-record.json and
+      junit/<report_name>.xml. Give each run of this command in a job its own.
+    default: gosec
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A gosec that can't complete still fails it.
+    default: "false"
+  require_suppression_reasons:
+    description: >
+      Count each #nosec or //gosec:disable comment without a justification
+      (#nosec G401 -- why it is safe) as a finding, so every suppression in
+      the code says why.
+    default: "false"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which go.mod and go.sum, with which tools and settings, and what it
+      found.
+    default: "false"
+  sarif:
+    description: >
+      Write gosec's SARIF report, with every module's results in one file and
+      paths relative to working_dir, for code scanning tools.
+    default: "true"
+  severity:
+    description: >
+      Report only findings of this severity or higher.
+    default: low
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      go-security-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  tags:
+    description: >
+      Build tags, separated by commas, for both choosing the files and
+      type-checking them.
+    default: ""
+  tests:
+    description: >
+      Also check _test.go files. A finding in a file both builds see is
+      reported once.
+    default: "false"
+  working_dir:
+    description: >
+      Directory to run in: modules are relative to it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=go-security-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: gosec
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_CONFIDENCE: ${{ inputs.confidence }}
+        PARAM_CONFIG: ${{ inputs.config }}
+        PARAM_EXCLUDE: ${{ inputs.exclude }}
+        PARAM_EXCLUDE_GENERATED: ${{ inputs.exclude_generated }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_INCLUDE: ${{ inputs.include }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_MODULES: ${{ inputs.modules }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_REQUIRE_SUPPRESSION_REASONS: ${{ inputs.require_suppression_reasons }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SARIF: ${{ inputs.sarif }}
+        PARAM_SEVERITY: ${{ inputs.severity }}
+        PARAM_TAGS: ${{ inputs.tags }}
+        PARAM_TESTS: ${{ inputs.tests }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/gosec.sh"
+        "SCRIPT_GO_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/go_security.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

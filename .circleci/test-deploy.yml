@@ -1,0 +1,437 @@
+version: 2.1
+orbs:
+  # Your orb will be automatically injected here during the pipeline.
+  # Reference your orb's jobs and commands below as they will exist when built.
+  orb-tools: circleci/orb-tools@12.5
+  # The orb definition is intentionally not included here. It will be injected into the pipeline.
+  go-security-orb: {}
+
+# Use this tag to ensure test jobs always run,
+# even though the downstream publish job will only run on release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+# Filter for release tags.
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+# The fixtures: clean, which every check passes; vulnerable, which links golang.org/x/text v0.3.5
+# and calls GO-2021-0113; and weakcrypto, which uses MD5 and SHA-1.
+clean: &clean tests/fixtures/clean
+vulnerable: &vulnerable tests/fixtures/vulnerable
+weakcrypto: &weakcrypto tests/fixtures/weakcrypto
+
+jobs:
+  # Installs every tool on amd64, each reporting the install command's default version and
+  # matching its checksum table (govulncheck and go-licenses are built, reproducibly), then
+  # installs each again from the cache.
+  install-test:
+    docker:
+      - image: cimg/go:1.27
+    steps:
+      - checkout
+      - go-security-orb/install:
+          tools: go govulncheck gosec go-licenses
+      - run:
+          name: Verify Install
+          command: |
+            default() { yq ".parameters.${1//-/_}_version.default" src/commands/install.yml; }
+            [[ "$(command -v go)" == "${HOME}/sdk/go/bin/go" ]]
+            [[ "$(go env GOVERSION)" == "go$(default go)" ]]
+            gosec -version | grep -qx "Version: $(default gosec)"
+            [[ "$(go version -m "$(command -v govulncheck)" | awk '$1 == "mod" { print $3 }')" == "v$(default govulncheck)" ]]
+            [[ "$(go version -m "$(command -v go-licenses)" | awk '$1 == "mod" { print $3 }')" == "v$(default go-licenses)" ]]
+            # Each binary is the one its checksum table pins, and its install record says so.
+            for tool in govulncheck gosec go-licenses; do
+              entry=$(grep -F "[\"$(default "${tool}")/amd64\"]=" "src/install/${tool}/install.sh" | tail -n 1 | cut -d'"' -f4)
+              [[ "$(sha512sum "$(command -v "${tool}")" | awk '{ print $1 }')" == "${entry}" ]] || { echo "FAIL: ${tool} is not the pinned binary."; exit 1; }
+              jq -e --arg sha "${entry}" '.binary_sha512 == $sha' "$(dirname "$(command -v "${tool}")")/.${tool}.install.json"
+            done
+      - run:
+          name: Verify A Second Install Uses The Cache
+          command: |
+            for tool in go govulncheck gosec go-licenses; do
+              version=$(yq ".parameters.${tool//-/_}_version.default" src/commands/install.yml)
+              PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+                PARAM_DOWNLOAD_BASE_URL="" bash "src/install/${tool}/install.sh" 2>&1 | tee "/tmp/${tool}-second-install.log"
+              grep -q "from the cache." "/tmp/${tool}-second-install.log"
+              if grep -q "^Downloading\|^Building" "/tmp/${tool}-second-install.log"; then
+                echo "FAIL: the second install of ${tool} downloaded or built it again."
+                exit 1
+              fi
+            done
+  # Runs the install scripts under the verify_checksums default declared in install.yml against
+  # real releases that have no checksum in the tables, and against a download_base_url mirror: a
+  # local HTTPS server serving first the real gosec release and then a tampered copy, which must
+  # be rejected.
+  checksum-test:
+    docker:
+      - image: cimg/python:3.13
+    environment:
+      UNLISTED_GOSEC: 2.22.0
+      UNLISTED_GOVULNCHECK: 1.1.4
+    steps:
+      - checkout
+      - run:
+          name: Unlisted Versions Fail Closed By Default
+          command: |
+            REPO_DIR=$(pwd)
+            DEFAULT_MODE=$(yq '.parameters.verify_checksums.default' src/commands/install.yml)
+            echo "verify_checksums default: ${DEFAULT_MODE}"
+            for spec in "gosec:${UNLISTED_GOSEC}" "govulncheck:${UNLISTED_GOVULNCHECK}" "go:1.25.0"; do
+              tool=${spec%%:*}
+              version=${spec#*:}
+              cd "$(mktemp -d)" && mkdir bin
+              if HOME="$(pwd)" PARAM_INSTALL_PATH="$(pwd)/bin" PARAM_VERIFY_CHECKSUMS="${DEFAULT_MODE}" PARAM_VERSION="${version}" \
+                  PARAM_CACHING=true PARAM_DOWNLOAD_BASE_URL="" bash "${REPO_DIR}/src/install/${tool}/install.sh"; then
+                echo "FAIL: install succeeded for unlisted ${tool} ${version} under the default."
+                exit 1
+              fi
+              if [[ -n "$(ls -A bin)" || -n "$(ls -A | grep -vx bin)" ]]; then
+                echo "FAIL: install downloaded or installed ${tool} before rejecting the unlisted version."
+                ls -laR
+                exit 1
+              fi
+              echo "PASS: unlisted ${tool} ${version} failed closed before downloading anything."
+            done
+      - run:
+          name: known_versions Opt-Out Installs Unlisted Version
+          command: |
+            REPO_DIR=$(pwd)
+            cd "$(mktemp -d)" && mkdir bin
+            PARAM_INSTALL_PATH="$(pwd)/bin" PARAM_VERIFY_CHECKSUMS=known_versions PARAM_VERSION="${UNLISTED_GOSEC}" \
+              PARAM_CACHING=false PARAM_DOWNLOAD_BASE_URL="" bash "${REPO_DIR}/src/install/gosec/install.sh" 2>&1 | tee install.log
+            grep -q "has no checksum for gosec ${UNLISTED_GOSEC}" install.log
+            grep -q "UNVERIFIED" install.log
+            bin/gosec -version | grep -qx "Version: ${UNLISTED_GOSEC}"
+      - run:
+          name: A Mirror Serving A Tampered Release Is Rejected
+          command: |
+            REPO_DIR=$(pwd)
+            VERSION=$(yq '.parameters.version.default' src/commands/install_gosec.yml)
+            ASSET="gosec_${VERSION}_linux_amd64.tar.gz"
+            MIRROR=$(mktemp -d)
+            DIR="${MIRROR}/www/securego/gosec/releases/download/v${VERSION}"
+            mkdir -p "${DIR}"
+            curl --fail --silent --show-error --location --proto '=https' --output "${DIR}/${ASSET}" \
+              "https://github.com/securego/gosec/releases/download/v${VERSION}/${ASSET}"
+            openssl req -x509 -newkey rsa:2048 -nodes -keyout "${MIRROR}/key.pem" -out "${MIRROR}/cert.pem" -days 1 \
+              -subj /CN=localhost -addext subjectAltName=DNS:localhost 2> /dev/null
+            cat > "${MIRROR}/serve.py" \<< 'EOF'
+            import functools, http.server, ssl, sys
+            handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+            server = http.server.HTTPServer(("127.0.0.1", 8443), handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(sys.argv[2], sys.argv[3])
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.serve_forever()
+            EOF
+            python3 "${MIRROR}/serve.py" "${MIRROR}/www" "${MIRROR}/cert.pem" "${MIRROR}/key.pem" > "${MIRROR}/serve.log" 2>&1 &
+            SERVER=$!
+            trap 'kill "${SERVER}"' EXIT
+            sleep 2
+            install_from_mirror() {
+              rm -rf "${MIRROR}/bin" && mkdir "${MIRROR}/bin"
+              CURL_CA_BUNDLE="${MIRROR}/cert.pem" PARAM_INSTALL_PATH="${MIRROR}/bin" PARAM_VERIFY_CHECKSUMS=strict \
+                PARAM_VERSION="${VERSION}" PARAM_CACHING=false PARAM_DOWNLOAD_BASE_URL=https://localhost:8443 \
+                bash "${REPO_DIR}/src/install/gosec/install.sh"
+            }
+            install_from_mirror 2>&1 | tee "${MIRROR}/good.log"
+            grep -q "Downloading https://localhost:8443/securego/gosec/releases/download/v${VERSION}/${ASSET}" "${MIRROR}/good.log"
+            "${MIRROR}/bin/gosec" -version | grep -qx "Version: ${VERSION}"
+            printf 'tampered' >> "${DIR}/${ASSET}"
+            if install_from_mirror > "${MIRROR}/bad.log" 2>&1; then
+              cat "${MIRROR}/bad.log"
+              echo "FAIL: a tampered release from the mirror was installed."
+              exit 1
+            fi
+            cat "${MIRROR}/bad.log"
+            grep -q "download was rejected and not installed" "${MIRROR}/bad.log"
+            [[ ! -e "${MIRROR}/bin/gosec" ]]
+            echo "PASS: the tampered release was rejected."
+      - run:
+          name: install Refuses A Tool It Doesn't Know
+          command: |
+            if PARAM_TOOLS="gosec staticcheck" bash src/scripts/install_tools.sh; then
+              echo "FAIL: install accepted a tool it doesn't install."
+              exit 1
+            fi
+  # Installs every tool on an Arm machine, builds there, and runs the checks that read binaries.
+  arm64-test:
+    docker:
+      - image: cimg/go:1.27
+    resource_class: arm.medium
+    steps:
+      - checkout
+      - go-security-orb/install:
+          tools: go govulncheck gosec go-licenses
+      - run:
+          name: Verify arm64 Install, And Build
+          command: |
+            if [[ "$(uname -m)" != "aarch64" ]]; then
+              echo "FAIL: expected an aarch64 machine, got $(uname -m)."
+              exit 1
+            fi
+            for tool in go govulncheck gosec go-licenses; do
+              binary=$(command -v "${tool}")
+              machine=$(readelf --file-header "${binary}" | awk -F: '/Machine:/ { gsub(/^ +/, "", $2); print $2 }')
+              echo "${binary}: ${machine}"
+              [[ "${machine}" == AArch64 ]] || { echo "FAIL: ${binary} is not an arm64 build."; exit 1; }
+            done
+            mkdir -p /tmp/bin
+            (cd tests/fixtures/clean && GOFIPS140=v1.0.0 CGO_ENABLED=0 go build -o /tmp/bin/clean .)
+      - go-security-orb/fips_bin:
+          binaries: /tmp/bin/clean
+          require_cgo_disabled: true
+          output_dir: /tmp/reports/arm64
+      - go-security-orb/vulncheck_bin:
+          binaries: /tmp/bin/clean
+          output_dir: /tmp/reports/arm64
+      - go-security-orb/gosec:
+          working_dir: *weakcrypto
+          report_only: true
+          output_dir: /tmp/reports/arm64
+      - go-security-orb/fips_test:
+          working_dir: *clean
+          report_only: false
+          output_dir: /tmp/reports/arm64
+      - run:
+          name: Verify The Reports
+          command: |
+            jq -e '.binaries[0].goarch == "arm64" and .binaries[0].gofips140 != null' /tmp/reports/arm64/fips-bin.json
+            jq -e '[.[] | select(.finding)] | length == 3' /tmp/reports/arm64/gosec.json
+  # Every check passes on the clean fixture, with the real tools, and writes its reports.
+  checks-test:
+    docker:
+      - image: cimg/go:1.27
+    steps:
+      - checkout
+      - go-security-orb/install:
+          tools: go govulncheck gosec go-licenses
+      - go-security-orb/mod_verify:
+          working_dir: tests/fixtures
+          modules: all
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - go-security-orb/gosec:
+          working_dir: *clean
+          tests: true
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - go-security-orb/vulncheck:
+          working_dir: *clean
+          test: true
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - go-security-orb/licenses:
+          working_dir: tests/fixtures
+          modules: clean,vulnerable
+          platforms: linux/amd64 darwin/arm64
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - go-security-orb/fips_test:
+          working_dir: *clean
+          report_only: false
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - run:
+          name: Build For FIPS 140-3
+          command: |
+            mkdir -p /tmp/bin
+            cd tests/fixtures/clean
+            GOFIPS140=v1.0.0 CGO_ENABLED=0 go build -o /tmp/bin/clean .
+      - go-security-orb/fips_bin:
+          binaries: /tmp/bin/clean
+          require_cgo_disabled: true
+          output_dir: /tmp/reports/clean
+      - go-security-orb/vulncheck_bin:
+          binaries: /tmp/bin/*
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - run:
+          name: Verify The Reports
+          command: |
+            cd /tmp/reports/clean
+            jq -e '[.modules[].checks[] | select(.status == "failed" or .status == "error")] | length == 0' mod-verify.json
+            jq -e '[.modules[].path] | sort == ["clean", "vulnerable", "weakcrypto"]' mod-verify.json
+            jq -e 'length == 0' gosec.json
+            jq -e '.version == "2.1.0" and (.runs | length) == 1' gosec.sarif govulncheck.sarif
+            jq -e '[.scans[].vulnerabilities[] | select(.counts)] | length == 0' govulncheck.json govulncheck-bin.json
+            jq -e '.statements | type == "array"' govulncheck.openvex.json
+            jq -e '[.[] | select(.name == "golang.org/x/text") | .status] == ["allowed"]' licenses.json
+            jq -e '.modules[0].tests.failed == 0 and .modules[0].tests.passed == 1' fips-test.json
+            jq -e '.binaries[0].gofips140 == "v1.0.0-c2097c7c" and .binaries[0].fips140 == "on"' fips-bin.json
+            jq -e '.results[0].sha256 | test("^[0-9a-f]{64}$")' fips-bin.run-record.json
+            jq -e '.vuln_db.url == "https://vuln.go.dev" and (.vuln_db.last_modified | type) == "string"' govulncheck.run-record.json
+            for name in mod-verify gosec govulncheck licenses fips-test fips-bin govulncheck-bin; do
+              grep -q '<testsuite ' "junit/${name}.xml"
+            done
+            [[ "$(go env GOTOOLCHAIN)" == local ]]
+            [[ -z "$(git -C ~/project status --porcelain)" ]] || { git -C ~/project status; echo "FAIL: a check changed the checkout."; exit 1; }
+  # Every check finds what is wrong with the vulnerable and weakcrypto fixtures: with report_only,
+  # it passes and writes the findings; by default, it fails. Then the module cache is tampered
+  # with, which mod_verify must find.
+  findings-test:
+    docker:
+      - image: cimg/go:1.27
+    steps:
+      - checkout
+      - go-security-orb/install:
+          tools: go govulncheck gosec go-licenses
+      - go-security-orb/vulncheck:
+          working_dir: *vulnerable
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - run:
+          name: Build The Vulnerable Fixture
+          command: |
+            mkdir -p /tmp/bin
+            cd tests/fixtures/vulnerable
+            go build -o /tmp/bin/vulnerable .
+      - go-security-orb/vulncheck_bin:
+          binaries: /tmp/bin/vulnerable
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - go-security-orb/gosec:
+          working_dir: *weakcrypto
+          require_suppression_reasons: true
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - go-security-orb/licenses:
+          working_dir: *vulnerable
+          allowed_licenses: MIT
+          report_only: true
+          output_dir: /tmp/reports/findings
+      # report_only is true by default.
+      - go-security-orb/fips_test:
+          working_dir: *weakcrypto
+          output_dir: /tmp/reports/findings
+      - go-security-orb/fips_bin:
+          binaries: /tmp/bin/vulnerable
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - run:
+          name: Verify report_only Reported The Findings
+          command: |
+            cd /tmp/reports/findings
+            jq -e 'any(.scans[].vulnerabilities[]; .id == "GO-2021-0113" and .level == "called" and .counts)' govulncheck.json govulncheck-bin.json
+            jq -e 'any(.runs[0].results[]; .ruleId == "GO-2021-0113")' govulncheck.sarif
+            jq -e 'any(.statements[]; .vulnerability.name == "GO-2021-0113" and .status == "affected")' govulncheck.openvex.json
+            jq -e '[.[] | select(.finding) | .rule_id] | sort == ["G401", "G401", "G501", "G505"]' gosec.json
+            jq -e '[.[] | select(.name == "golang.org/x/text") | .status] == ["not-allowed"]' licenses.json
+            jq -e '.refused | sort == ["crypto/md5: use of MD5 is not allowed in FIPS 140-only mode", "crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only mode"]' fips-test.json
+            jq -e '[.binaries[0].checks[] | select(.status == "failed") | .check] == ["gofips140", "fips140"]' fips-bin.json
+      - run:
+          name: Verify The Checks Fail By Default
+          command: |
+            expect_failure() {
+              local says=$1
+              shift
+              if bash tests/run_command.sh "$@" > /tmp/run.log 2>&1; then
+                cat /tmp/run.log
+                echo "FAIL: $* passed."
+                exit 1
+              fi
+              cat /tmp/run.log
+              grep -qF -- "${says}" /tmp/run.log || { echo "FAIL: $* did not say: ${says}"; exit 1; }
+            }
+            expect_failure "ERROR: govulncheck found 1 vulnerability that counts at the called level." vulncheck working_dir=tests/fixtures/vulnerable
+            expect_failure "ERROR: govulncheck found 1 vulnerability that counts at the called level." vulncheck_bin binaries=/tmp/bin/vulnerable
+            expect_failure "ERROR: gosec found 3 problems in example.com/weakcrypto." gosec working_dir=tests/fixtures/weakcrypto
+            expect_failure "golang.org/x/text@v0.3.5: BSD-3-Clause (not in allowed_licenses)" licenses working_dir=tests/fixtures/vulnerable allowed_licenses=MIT
+            expect_failure "ERROR: 2 tests failed with GOFIPS140=v1.0.0 and GODEBUG=fips140=only" fips_test working_dir=tests/fixtures/weakcrypto report_only=false
+            expect_failure "built without GOFIPS140" fips_bin binaries=/tmp/bin/vulnerable
+            # A tool that can't complete fails even with report_only.
+            printf 'package weakcrypto\n\nfunc broken() int { return "x" }\n' > tests/fixtures/weakcrypto/broken.go
+            expect_failure "gosec could not type-check example.com/weakcrypto" gosec working_dir=tests/fixtures/weakcrypto report_only=true
+            expect_failure "does not build" fips_test working_dir=tests/fixtures/weakcrypto
+            rm tests/fixtures/weakcrypto/broken.go
+            expect_failure "govulncheck could not scan" vulncheck_bin binaries=README.md report_only=true
+      - run:
+          name: Verify mod_verify Finds A Tampered Module Cache
+          command: |
+            dir="$(go env GOMODCACHE)/golang.org/x/text@v0.3.5"
+            chmod -R u+w "${dir}"
+            echo "// changed" >> "${dir}/language/parse.go"
+            if bash tests/run_command.sh mod_verify working_dir=tests/fixtures/vulnerable > /tmp/run.log 2>&1; then
+              cat /tmp/run.log
+              echo "FAIL: mod_verify passed with a changed module cache."
+              exit 1
+            fi
+            cat /tmp/run.log
+            grep -qF "golang.org/x/text v0.3.5: dir has been modified" /tmp/run.log
+            go clean -modcache
+            bash tests/run_command.sh mod_verify working_dir=tests/fixtures/vulnerable
+            [[ -z "$(git -C ~/project status --porcelain)" ]] || { git -C ~/project status; echo "FAIL: a check changed the checkout."; exit 1; }
+  # A machine executor without Go: install_go installs it, fetch_vuln_db fetches the database
+  # from vuln.go.dev, and vulncheck scans with that copy after vuln.go.dev is blocked.
+  machine-test:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - go-security-orb/install:
+          tools: go govulncheck
+      - go-security-orb/fetch_vuln_db
+      - run:
+          name: Block vuln.go.dev
+          command: |
+            echo "127.0.0.1 vuln.go.dev" | sudo tee -a /etc/hosts
+            if curl -sSf --max-time 10 -o /dev/null https://vuln.go.dev/index/db.json; then
+              echo "vuln.go.dev is still reachable."
+              exit 1
+            fi
+      - go-security-orb/vulncheck:
+          working_dir: *vulnerable
+          report_only: true
+          run_record: true
+          output_dir: /tmp/reports/offline
+      - run:
+          name: Verify The Scan Used The Fetched Copy
+          command: |
+            [[ "${GO_SECURITY_VULN_DB}" == "file://${HOME}/.cache/go-vulndb" ]]
+            cd /tmp/reports/offline
+            jq -e 'any(.scans[].vulnerabilities[]; .id == "GO-2021-0113" and .counts)' govulncheck.json
+            jq -e '.vuln_db.url == env.GO_SECURITY_VULN_DB' govulncheck.run-record.json
+            jq -e '.vuln_db.fetched.source == "https://vuln.go.dev/vulndb.zip" and (.vuln_db.fetched.zip_sha256 | test("^[0-9a-f]{64}$"))' govulncheck.run-record.json
+            jq -e '.vuln_db.fetched.entries > 1000' govulncheck.run-record.json
+
+workflows:
+  test-deploy:
+    jobs:
+      # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
+      # Test your orb's commands in a custom job and test your orb's jobs directly as a part of this workflow.
+      - install-test:
+          filters: *filters
+      - checksum-test:
+          filters: *filters
+      - arm64-test:
+          filters: *filters
+      - checks-test:
+          filters: *filters
+      - findings-test:
+          filters: *filters
+      - machine-test:
+          filters: *filters
+      # The orb must be re-packed for publishing, and saved to the workspace.
+      - orb-tools/pack:
+          filters: *release-filters
+      - orb-tools/publish:
+          orb_name: juburr/go-security-orb
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+            - install-test
+            - checksum-test
+            - arm64-test
+            - checks-test
+            - findings-test
+            - machine-test
+          context: orb-publishing
+          filters: *release-filters
