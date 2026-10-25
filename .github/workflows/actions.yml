@@ -64,7 +64,7 @@ jobs:
           gosec -version | grep -qx "Version: $(default gosec)"
           for tool in govulncheck gosec go-licenses; do
             binary=$(command -v "${tool}")
-            [[ "${binary}" == "${HOME}/bin/${tool}" ]]
+            [[ "${binary}" == "${HOME}/.go-security-orb/bin/${tool}" ]]
             od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n' | grep -Fx "${ELF}"
             entry=$(grep -F "[\"$(default "${tool}")/${ARCH}\"]=" "src/install/${tool}/install.sh" | tail -n 1 | cut -d'"' -f4)
             [[ "$(sha512sum "${binary}" | awk '{ print $1 }')" == "${entry}" ]] || { echo "${tool} is not the pinned binary."; exit 1; }

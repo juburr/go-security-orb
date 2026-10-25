@@ -453,7 +453,16 @@ gs_plural() {
 # gs_tail FILE [LINES]: prints the last LINES (default 40) lines of FILE to
 # stderr, indented, to show why a tool failed.
 gs_tail() {
-    tail -n "${2:-40}" "$1" | sed 's/^/  /' >&2
+    local lines=${2:-40} total first
+    # A Go panic prints its message first, then the stack of every
+    # goroutine, so the message is printed too when the tail leaves it out.
+    total=$(wc -l < "$1")
+    first=$(awk '/^(panic|fatal error): / { print NR; exit }' "$1")
+    if [[ -n "${first}" ]] && ((first <= total - lines)); then
+        awk -v n="${first}" 'NR >= n && NR < n + 8' "$1" | sed 's/^/  /' >&2
+        echo "  ..." >&2
+    fi
+    tail -n "${lines}" "$1" | sed 's/^/  /' >&2
 }
 
 # gs_export NAME VALUE: exports NAME=VALUE, shell-quoted, to later steps

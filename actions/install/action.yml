@@ -61,7 +61,9 @@ inputs:
       Absolute path of the directory to install govulncheck, gosec and
       go-licenses into. It is created if needed and added to the PATH of later
       steps when it isn't already on it, and must be writable without root.
-      Defaults to $HOME/bin.
+      Defaults to $HOME/.go-security-orb/bin. Executor images don't put that
+      directory on the PATH, so it goes first, ahead of copies an image ships,
+      such as the govulncheck in cimg/go's ~/go/bin.
     default: ""
   tools:
     description: >

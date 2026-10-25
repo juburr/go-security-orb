@@ -28,8 +28,12 @@ ORB_NAME="go-security-orb-govulncheck"
 TOOL_NAME="govulncheck"
 TOOL_BINARY="govulncheck"
 TOOL_ARCHES="amd64 arm64"
-# The default install_path, under HOME.
-TOOL_DEFAULT_INSTALL_DIR="bin"
+# The default install_path, under HOME. Not bin, like the other juburr orbs:
+# cimg/go puts ~/go/bin, where it ships a govulncheck, before ~/bin on the
+# PATH, and the shared logic only adds a directory that isn't on it yet, so
+# the image's copy would win. No image puts this directory on the PATH, so
+# the install puts it first.
+TOOL_DEFAULT_INSTALL_DIR=".go-security-orb/bin"
 
 # govulncheck publishes no binaries, so install builds it with a pinned Go
 # release (gs_install_source_built) and checks the binary it built against

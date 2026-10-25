@@ -193,7 +193,9 @@ EOF
 # source-clean elsewhere, and binary-vulnerable for a file that starts with
 # GOBINARY (anything else is not a Go binary to it). -mode convert writes
 # the matching real SARIF or OpenVEX. STUB_VULN is stale (a database last
-# modified in 2020), nostdlib (no standard library version) or error (exit 1).
+# modified in 2020), nostdlib (no standard library version), error (exit 1) or
+# panic (a Go panic, its message followed by more goroutine stacks than the
+# scripts print, exit 2).
 {
     echo '#!/usr/bin/env bash'
     record
@@ -226,6 +228,15 @@ fi
 if [[ "${STUB_VULN:-}" == error ]]; then
     echo "govulncheck: loading packages: there are errors in the packages" >&2
     exit 1
+fi
+if [[ "${STUB_VULN:-}" == panic ]]; then
+    {
+        printf 'panic: unexpected expr: *ast.KeyValueExpr\n\ngoroutine 839 [running]:\n'
+        for n in $(seq 1 100); do
+            printf 'goroutine %d [select]:\nruntime.gopark()\n\n' "$((n + 1000))"
+        done
+    } >&2
+    exit 2
 fi
 if [[ "${mode}" == binary ]]; then
     if [[ "$(head -c 8 "${last}" 2> /dev/null)" != GOBINARY ]]; then
@@ -441,6 +452,10 @@ run vulncheck "working_dir=${CLEAN}" report_only=true run_record=true -- STUB_VU
 check "govulncheck failing fails the step" failed
 check "showing its output" said "there are errors in the packages"
 check "the run record says error" json_is "${OUT}/govulncheck.run-record.json" .outcome error
+run vulncheck "working_dir=${CLEAN}" report_only=true -- STUB_VULN=panic
+check "a govulncheck that panics fails the step" failed
+check "showing the panic's message above the goroutine stacks" said "panic: unexpected expr: *ast.KeyValueExpr"
+check "and the end of its output" said "goroutine 1100 [select]:"
 run vulncheck "working_dir=${CLEAN}" -- GOFLAGS=-mod=mod
 check "GOFLAGS=-mod=mod is refused" said "GOFLAGS has -mod=mod"
 printf 'GOFLAGS=-mod=mod\n' > "${WORK}/goenv-modmod"
