@@ -103,7 +103,7 @@ ANALYZE_JQ='
         | select([$failed[] | select(.package == $p)] | length == 0)
         | ($out[$p + "\u0000"] // []) as $o
         | {package: $p, refused: ($o | refused), output: ($o[-40:] | join(""))}] as $package_failures
-    | {module: $module, path: $path, go_version: $go,
+    | {module: $mod, path: $path, go_version: $go,
        tests: {passed: [$tests[] | select(.Action == "pass")] | length, failed: ($failed | length),
                skipped: [$tests[] | select(.Action == "skip")] | length},
        packages: {passed: [$packages[] | select(.Action == "pass")] | length,
@@ -177,7 +177,7 @@ for module in "${GS_MODULES[@]}"; do
     done | jq -s -c 'add // {}')
     unset SKIP
     cat "${WORK}/events.json" >> "${WORK}/all-events.json"
-    if ! jq -s -c --argjson rerun "${RERUN_JSON}" --arg module "$(awk '$1 == "module" { gsub(/"/, "", $2); print $2; exit }' "${module}/go.mod")" \
+    if ! jq -s -c --argjson rerun "${RERUN_JSON}" --arg mod "$(awk '$1 == "module" { gsub(/"/, "", $2); print $2; exit }' "${module}/go.mod")" \
         --arg path "${module}" --arg go "${GS_GO_VERSION}" "${ANALYZE_JQ}" "${WORK}/events.json" > "${WORK}/result.json" 2> "${WORK}/jq.err"; then
         ERRORS+=("${label}")
         echo "ERROR: go test's output for ${label} could not be read: $(head -c 300 "${WORK}/jq.err")" >&2

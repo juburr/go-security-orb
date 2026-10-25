@@ -110,7 +110,7 @@ Every script in `src/scripts/` except the shared install code follows the conven
 - `$BASH_ENV` exports use `printf 'export %s=%q\n'`; `eval` only runs orb code (`"${SCRIPT_GO_SECURITY_LIB}"`). Secrets never go on a command line, and curl that sends credentials or fetches trusted content uses `--fail` and `--proto '=https'`.
 - Temporary files and directories come from `mktemp` and are removed by one EXIT trap per script (a second `trap ... EXIT` replaces the first).
 - With `pipefail`, `head -n 5` ending a pipeline can kill the writer with SIGPIPE (exit 141); use `awk 'NR <= 5'`, which reads everything.
-- The scripts must work with jq 1.6: never `jq -e` on a tool's output, and in jq a pipe binds looser than `as`: write `([...] | unique) as $x`, not `[...] | unique as $x`.
+- The scripts must work with jq 1.6: never `jq -e` on a tool's output, never name a jq variable `$module` (a keyword in jq 1.6; the scripts use `$mod`), and in jq a pipe binds looser than `as`: write `([...] | unique) as $x`, not `[...] | unique as $x`.
 
 ## Naming
 
@@ -120,7 +120,7 @@ Command names say what they check: the tool (`gosec`, `vulncheck` for govulnchec
 
 Before committing changes, verify work locally if tools are available on the system:
 - Run `shellcheck src/scripts/*.sh src/scripts/lib/*.sh src/install/*/*.sh actions/*.sh tests/*.sh tests/install_fixtures/*.sh`
-- Run every `tests/*_test.sh`, also with bash 4.0 and 4.3 first on the `PATH`, and under `LC_ALL=en_US.UTF-8` when the system has that locale
+- Run every `tests/*_test.sh`, also with bash 4.0 and 4.3 first on the `PATH`, with jq 1.6, and under `LC_ALL=en_US.UTF-8` when the system has that locale
 - Run `circleci orb pack src/ > orb.yml && circleci orb validate orb.yml`, and validate `.circleci/test-deploy.yml` with the packed orb spliced in under `orbs.go-security-orb`
 - Run `actionlint .github/workflows/actions.yml`
 - For changes to a command, also run it with the real tools against the fixtures through `tests/run_command.sh`, as `test-deploy.yml` does

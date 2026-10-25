@@ -239,8 +239,8 @@ result() {
     if [[ -n "${4:-}" && -s "${4:-}" ]]; then
         detail=$(tail -n 40 "$4")
     fi
-    jq -cn --arg module "${MODULE_PATH}" --arg path "${module}" --arg check "$1" --arg status "$2" --arg message "$3" \
-        --arg detail "${detail}" '{module: $module, path: $path, check: $check, status: $status, message: $message,
+    jq -cn --arg mod "${MODULE_PATH}" --arg path "${module}" --arg check "$1" --arg status "$2" --arg message "$3" \
+        --arg detail "${detail}" '{module: $mod, path: $path, check: $check, status: $status, message: $message,
             detail: (if $detail == "" then null else $detail end)}' >> "${WORK}/results.jsonl"
     case "$2" in
         passed) echo "  ${1}: ${3}" ;;

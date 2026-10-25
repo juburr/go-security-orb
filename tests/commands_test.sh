@@ -440,6 +440,21 @@ check "an entry without a reason fails" said "ignore accepts GO-2021-0113 withou
 run vulncheck "working_dir=${VULNERABLE}" "ignore=nothing to see"
 check "an entry that isn't an ID fails" said "ignore must start each line with a GO-, CVE- or GHSA- ID"
 
+begin "vulncheck: SARIF paths are relative to working_dir"
+mkdir -p "${WORK}/monorepo/services"
+cp -R "${VULNERABLE}" "${WORK}/monorepo/services/api"
+run vulncheck "working_dir=${WORK}/monorepo" modules=services/api report_only=true
+check "a module below working_dir is scanned" succeeded
+# shellcheck disable=SC2016 # jq program, not shell
+SRCROOT_URIS='[.runs[0].results[] | .. | objects | select(.uriBaseId? == "%SRCROOT%") | .uri] | unique'
+check "every source location names the module's directory" json_is "${OUT}/govulncheck.sarif" \
+    "${SRCROOT_URIS} | map(startswith(\"services/api/\")) | all" true
+check "the call trace's frames too" json_is "${OUT}/govulncheck.sarif" \
+    "${SRCROOT_URIS} | index(\"services/api/main.go\") != null" true
+check "dependencies stay relative to the module cache" json_is "${OUT}/govulncheck.sarif" \
+    '[.runs[0].results[] | .. | objects | select(.uriBaseId? == "%GOMODCACHE%") | .uri] | unique | join(",")' \
+    golang.org/x/text@v0.3.5/language/parse.go
+
 begin "vulncheck: what govulncheck can't vouch for fails whatever report_only says"
 run vulncheck "working_dir=${CLEAN}" report_only=true -- STUB_VULN=stale
 check "a stale database fails" failed

@@ -805,12 +805,16 @@ gs_vuln_print() {
 # what to put before each file's paths to make them relative to the working
 # directory, and ACCEPTED a JSON object of the vulnerabilities ignore
 # accepts, by ID, with their reasons, which mark their results suppressed.
+# The prefix goes before every path under the module (uriBaseId %SRCROOT%),
+# in a result's locations, code flows and stacks alike; paths in the module
+# cache (%GOMODCACHE%) and the standard library (%GOROOT%) stay as they are.
 gs_vuln_sarif() {
     # shellcheck disable=SC2016 # jq program, not shell
     jq -s --argjson prefixes "$1" --argjson accepted "$2" '
+        def rebase($prefix): if (.uri | type) == "string" and (.uriBaseId // "%SRCROOT%") == "%SRCROOT%"
+            then .uri = $prefix + .uri else . end;
         [to_entries[] | .key as $i | .value.runs[]? | .results = ((.results // []) | map(
-            .locations = ((.locations // []) | map(if .physicalLocation.artifactLocation.uri? then
-                .physicalLocation.artifactLocation.uri |= ($prefixes[$i] + .) else . end))
+            (.. | objects | select(has("artifactLocation")) | .artifactLocation) |= rebase($prefixes[$i])
             | if $accepted[.ruleId] then .suppressions = [{kind: "external", justification: $accepted[.ruleId]}] else . end))]
         | {version: "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
            runs: (if length == 0 then [{tool: {driver: {name: "govulncheck", informationUri: "https://golang.org/x/vuln", rules: []}}, results: []}]
