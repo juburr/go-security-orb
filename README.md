@@ -108,7 +108,7 @@ Every check tells findings apart from a tool that didn't complete: findings fail
 version: 2.1
 
 orbs:
-  go-security: juburr/go-security-orb@0.1.0
+  go-security: juburr/go-security-orb@0.1.1
 
 jobs:
   security:
@@ -144,13 +144,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: juburr/go-security-orb/actions/install@v0.1.0
+      - uses: juburr/go-security-orb/actions/install@v0.1.1
         with:
           tools: go govulncheck gosec go-licenses
-      - uses: juburr/go-security-orb/actions/mod_verify@v0.1.0
-      - uses: juburr/go-security-orb/actions/gosec@v0.1.0
-      - uses: juburr/go-security-orb/actions/vulncheck@v0.1.0
-      - uses: juburr/go-security-orb/actions/licenses@v0.1.0
+      - uses: juburr/go-security-orb/actions/mod_verify@v0.1.1
+      - uses: juburr/go-security-orb/actions/gosec@v0.1.1
+      - uses: juburr/go-security-orb/actions/vulncheck@v0.1.1
+      - uses: juburr/go-security-orb/actions/licenses@v0.1.1
 ```
 
 Each check writes its reports to `/tmp/go-security-reports` and stores them as artifacts, even when it fails. See [GitHub Actions](#-github-actions) for how the actions map to the orb's commands.
@@ -432,23 +432,23 @@ Each of the orb's commands has a GitHub Action of the same name. The actions run
 
 | Action | Orb command |
 | --- | --- |
-| `juburr/go-security-orb/actions/install@v0.1.0` | [`go-security/install`](#go-securityinstall) |
-| `juburr/go-security-orb/actions/install_go@v0.1.0`, `install_govulncheck`, `install_gosec`, `install_go_licenses` | [`go-security/install_<tool>`](#go-securityinstall_tool) |
-| `juburr/go-security-orb/actions/vulncheck@v0.1.0` | [`go-security/vulncheck`](#go-securityvulncheck) |
-| `juburr/go-security-orb/actions/vulncheck_bin@v0.1.0` | [`go-security/vulncheck_bin`](#go-securityvulncheck_bin) |
-| `juburr/go-security-orb/actions/fetch_vuln_db@v0.1.0` | [`go-security/fetch_vuln_db`](#go-securityfetch_vuln_db) |
-| `juburr/go-security-orb/actions/gosec@v0.1.0` | [`go-security/gosec`](#go-securitygosec) |
-| `juburr/go-security-orb/actions/licenses@v0.1.0` | [`go-security/licenses`](#go-securitylicenses) |
-| `juburr/go-security-orb/actions/mod_verify@v0.1.0` | [`go-security/mod_verify`](#go-securitymod_verify) |
-| `juburr/go-security-orb/actions/fips_bin@v0.1.0` | [`go-security/fips_bin`](#go-securityfips_bin) |
-| `juburr/go-security-orb/actions/fips_test@v0.1.0` | [`go-security/fips_test`](#go-securityfips_test) |
+| `juburr/go-security-orb/actions/install@v0.1.1` | [`go-security/install`](#go-securityinstall) |
+| `juburr/go-security-orb/actions/install_go@v0.1.1`, `install_govulncheck`, `install_gosec`, `install_go_licenses` | [`go-security/install_<tool>`](#go-securityinstall_tool) |
+| `juburr/go-security-orb/actions/vulncheck@v0.1.1` | [`go-security/vulncheck`](#go-securityvulncheck) |
+| `juburr/go-security-orb/actions/vulncheck_bin@v0.1.1` | [`go-security/vulncheck_bin`](#go-securityvulncheck_bin) |
+| `juburr/go-security-orb/actions/fetch_vuln_db@v0.1.1` | [`go-security/fetch_vuln_db`](#go-securityfetch_vuln_db) |
+| `juburr/go-security-orb/actions/gosec@v0.1.1` | [`go-security/gosec`](#go-securitygosec) |
+| `juburr/go-security-orb/actions/licenses@v0.1.1` | [`go-security/licenses`](#go-securitylicenses) |
+| `juburr/go-security-orb/actions/mod_verify@v0.1.1` | [`go-security/mod_verify`](#go-securitymod_verify) |
+| `juburr/go-security-orb/actions/fips_bin@v0.1.1` | [`go-security/fips_bin`](#go-securityfips_bin) |
+| `juburr/go-security-orb/actions/fips_test@v0.1.1` | [`go-security/fips_test`](#go-securityfips_test) |
 
-The per-tool install actions are `juburr/go-security-orb/actions/install_go@v0.1.0`, `juburr/go-security-orb/actions/install_govulncheck@v0.1.0`, `juburr/go-security-orb/actions/install_gosec@v0.1.0` and `juburr/go-security-orb/actions/install_go_licenses@v0.1.0`.
+The per-tool install actions are `juburr/go-security-orb/actions/install_go@v0.1.1`, `juburr/go-security-orb/actions/install_govulncheck@v0.1.1`, `juburr/go-security-orb/actions/install_gosec@v0.1.1` and `juburr/go-security-orb/actions/install_go_licenses@v0.1.1`.
 
 To upload SARIF to GitHub code scanning (the job needs `permissions: security-events: write`), point the upload at the report:
 
 ```yaml
-      - uses: juburr/go-security-orb/actions/gosec@v0.1.0
+      - uses: juburr/go-security-orb/actions/gosec@v0.1.1
         with:
           report_only: "true"
       - uses: github/codeql-action/upload-sarif@v4
@@ -459,7 +459,7 @@ To upload SARIF to GitHub code scanning (the job needs `permissions: security-ev
 
 How they differ from the orb's commands:
 
-- **Versions.** An action is referenced by the repository's release tag, such as `v0.1.0`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/go-security-orb/actions/vulncheck@<sha> # v0.1.0`.
+- **Versions.** An action is referenced by the repository's release tag, such as `v0.1.1`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/go-security-orb/actions/vulncheck@<sha> # v0.1.1`.
 - **Inputs are strings.** Write booleans and numbers quoted, such as `report_only: "true"`.
 - **Environment variables.** The orb expands `$NAME` in its parameters with the CircleCI CLI, which GitHub's runners don't have, so the actions take values as they are. Use GitHub's expressions instead, such as `go_version: ${{ vars.GO_RELEASE }}`. For `mod_verify`'s credentials, set the variables `username` and `password` name from secrets, at the job or step level.
 - **Artifacts.** A command that stores artifacts uploads `output_dir` with [`actions/upload-artifact`](https://github.com/actions/upload-artifact), even when the step fails, as an artifact named `go-security-reports-<report_name>-` and a random suffix, since artifact names must be unique in a workflow run. JUnit files are in `output_dir/junit/`, for any JUnit report action.
