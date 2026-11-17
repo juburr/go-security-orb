@@ -125,7 +125,16 @@ if [[ -n "${GOPROXY_VALUE}" ]]; then
             || match "${proxy}" '^file:///[^?#[:space:]]*$'; then
             continue
         fi
-        echo "ERROR: goproxy has '${proxy}', which is not direct, off, an https:// URL without a query or" >&2
+        # Shown without a query, fragment or user info, which can hold a
+        # token: the step fails before anything is exported, but the log stays.
+        shown=${proxy%%[?#]*}
+        if [[ "${shown}" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@(.*)$ ]]; then
+            shown="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+        fi
+        if [[ "${shown}" != "${proxy}" ]]; then
+            shown+=" (with its query or fragment left out here)"
+        fi
+        echo "ERROR: goproxy has ${shown}, which is not direct, off, an https:// URL without a query or" >&2
         echo "  fragment, a file:/// URL, or an http:// URL on this machine." >&2
         exit 1
     done

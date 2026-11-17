@@ -130,8 +130,12 @@ refused() {
 }
 refused "credentials in a proxy URL" "goproxy holds credentials in a URL" "goproxy=https://ci:t0ken@proxy.example.com"
 check "  never showing them" not_said t0ken
-refused "plain HTTP to another machine" "goproxy has 'http://proxy.example.com'" "goproxy=http://proxy.example.com,direct"
-refused "a proxy URL with a query" "goproxy has" "goproxy=https://proxy.example.com/?token=x"
+refused "plain HTTP to another machine" "goproxy has http://proxy.example.com, which" "goproxy=http://proxy.example.com,direct"
+refused "a proxy URL with a query" "goproxy has https://proxy.example.com/ (with its query or fragment left out here)" \
+    "goproxy=https://proxy.example.com/?token=qu3ry-secret"
+check "  never showing the query" not_said qu3ry-secret
+refused "a proxy URL with a fragment" "goproxy has" "goproxy=https://proxy.example.com/go#fr4g-secret"
+check "  never showing the fragment" not_said fr4g-secret
 refused "a trailing comma" "goproxy must be" "goproxy=https://proxy.example.com,"
 refused "spaces in goproxy" "goproxy must be" "goproxy=https://a.example.com https://b.example.com"
 refused "gonosumdb matching public modules" "gonosumdb (github.com) matches public modules such as github.com/owner/repo" \
