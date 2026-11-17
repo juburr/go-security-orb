@@ -18,13 +18,24 @@ trap 'rm -rf "${WORK}"' EXIT
 mkdir -p "${WORK}/stubs" "${WORK}/home"
 
 # A PATH without any circleci, and one with a stand-in that expands $NAME and
-# ${NAME} on stdin, as the real CLI does.
+# ${NAME} on stdin, as the real CLI does. A directory that holds a circleci,
+# such as /usr/bin on CircleCI's images, which holds bash too, is replaced by
+# one of links to everything else in it.
 CLEAN_PATH=""
 IFS=: read -r -a DIRS <<< "${PATH}"
-for dir in "${DIRS[@]}"; do
-    if [[ -n "${dir}" && ! -x "${dir}/circleci" ]]; then
-        CLEAN_PATH+="${CLEAN_PATH:+:}${dir}"
+for i in "${!DIRS[@]}"; do
+    dir=${DIRS[${i}]}
+    [[ -n "${dir}" && -d "${dir}" ]] || continue
+    if [[ -e "${dir}/circleci" ]]; then
+        mkdir -p "${WORK}/path/${i}"
+        for file in "${dir}"/*; do
+            if [[ "${file##*/}" != circleci && -x "${file}" ]]; then
+                ln -s "${file}" "${WORK}/path/${i}/${file##*/}"
+            fi
+        done
+        dir="${WORK}/path/${i}"
     fi
+    CLEAN_PATH+="${CLEAN_PATH:+:}${dir}"
 done
 cat > "${WORK}/stubs/circleci" << 'EOF'
 #!/usr/bin/env bash
@@ -67,6 +78,7 @@ empty() { [[ ! -s "$1" ]]; }
 # exported NAME VALUE: sourcing BASH_ENV sets NAME to VALUE.
 exported() {
     local got
+    # shellcheck disable=SC2016 # expanded by the inner bash
     got=$(env -i bash -c 'source "$1" && printf "%s" "${!2-<unset>}"' _ "${WORK}/bash_env" "$1")
     [[ "${got}" == "$2" ]] || { OUTPUT+=$'\n'"${1} is '${got}', not '${2}'"; return 1; }
 }
