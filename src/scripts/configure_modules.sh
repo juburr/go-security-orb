@@ -207,9 +207,16 @@ if [[ -n "${HOST}" ]]; then
     # and replaces the one an earlier run wrote, also by go-security-orb's
     # mod_verify before 0.2.0. A new file replaces the old one, so a .netrc
     # that is a symbolic link is replaced rather than written through.
+    # go looks a host up with its port, and curl, which git uses, without
+    # it, so a host with a port gets an entry for each. Each entry follows
+    # its own marker, which the awk below removes with the line after it.
     {
         printf '# configure_modules %s\n' "${HOST}"
         printf 'machine %s login %s password %s\n' "${HOST}" "${NETRC_USER}" "${NETRC_PASSWORD}"
+        if [[ "${HOST}" == *:* ]]; then
+            printf '# configure_modules %s\n' "${HOST}"
+            printf 'machine %s login %s password %s\n' "${HOST%:*}" "${NETRC_USER}" "${NETRC_PASSWORD}"
+        fi
         if [[ -f "${NETRC_FILE}" ]]; then
             awk -v marker="# configure_modules ${HOST}" -v old="# go-security-orb mod_verify ${HOST}" \
                 'skip { skip = 0; next } $0 == marker || $0 == old { skip = 1; next } { print }' "${NETRC_FILE}"

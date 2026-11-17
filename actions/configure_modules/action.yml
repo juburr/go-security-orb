@@ -51,7 +51,9 @@ inputs:
       The host to write the credentials in username and password for, with an
       optional port, such as artifactory.example.com or github.com. They go
       first in ~/.netrc (or the file NETRC names), mode 0600, replacing the
-      entry an earlier run wrote. Empty writes no credentials.
+      entry an earlier run wrote. With a port, the host gets two entries, since
+      go looks it up with the port and git without. Empty writes no
+      credentials.
     default: ""
   password:
     description: >

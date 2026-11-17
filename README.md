@@ -315,7 +315,7 @@ Sets up where go fetches modules from, for every later step, and writes credenti
 | `gonosumdb` | *(empty)* | `GONOSUMDB`: your own module path patterns, separated by commas, which go fetches through the proxy without asking the public checksum database. |
 | `goprivate` | *(empty)* | `GOPRIVATE`: module path patterns, separated by commas, which go fetches straight from their hosts, without the proxy or the checksum database. |
 | `gosumdb` | *(empty)* | `GOSUMDB`: the checksum database's name, with an optional `+key`, and an optional `https://` URL to reach it through, such as `sum.golang.org https://artifactory.example.com/artifactory/api/go/gosumdb`. `off` is refused. |
-| `host` | *(empty)* | The host, with an optional port, to write the credentials for. Empty writes none. |
+| `host` | *(empty)* | The host, with an optional port, to write the credentials for. With a port, it gets two entries, `host:port` for go and `host` for git, since curl, which git uses, looks hosts up without their port. Empty writes none. |
 | `username`, `password` | `PRIVATE_MODULES_USERNAME`, `PRIVATE_MODULES_TOKEN` | The environment variables that hold the credentials for `host`. They never reach a command line or the log. |
 
 An empty setting leaves the job's own value; at least one parameter must be set.

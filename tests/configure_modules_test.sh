@@ -184,6 +184,13 @@ run host=artifactory.example.com goproxy=http://proxy.example.com -- PRIVATE_MOD
 check "a refused setting leaves .netrc as it was" cmp -s "${NETRC_FILE}" "${WORK}/before"
 run host=artifactory.example.com
 check "host without credentials fails" said "but PRIVATE_MODULES_USERNAME or PRIVATE_MODULES_TOKEN is empty or unset"
+run host=git.example.com:8443 -- PRIVATE_MODULES_USERNAME=ci PRIVATE_MODULES_TOKEN=port-token
+check "a host with a port gets an entry with it, for go" file_has "${NETRC_FILE}" "machine git.example.com:8443 login ci password port-token"
+check "and one without it, for git" file_has "${NETRC_FILE}" "machine git.example.com login ci password port-token"
+check "both first" [ "$(grep -n '^machine' "${NETRC_FILE}" | head -n 2 | cut -d: -f1 | tr '\n' ' ')" == "2 4 " ]
+run host=git.example.com:8443 -- PRIVATE_MODULES_USERNAME=ci PRIVATE_MODULES_TOKEN=port-token-2
+check "a second run replaces both" [ "$(grep -c 'port-token' "${NETRC_FILE}")" -eq 2 ]
+check "with the new token" [ "$(grep -c 'password port-token-2$' "${NETRC_FILE}")" -eq 2 ]
 run host=artifactory.example.com -- PRIVATE_MODULES_USERNAME=ci "PRIVATE_MODULES_TOKEN=has space"
 check "a token .netrc can't hold fails" said "can't hold spaces or #"
 run host=artifactory.example.com -- PRIVATE_MODULES_USERNAME=ci 'PRIVATE_MODULES_TOKEN="quoted"'
