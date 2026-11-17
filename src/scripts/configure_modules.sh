@@ -171,9 +171,13 @@ if [[ -n "${HOST}" ]]; then
         echo "  Set both, such as in a CircleCI context or as GitHub Actions secrets, or leave host empty." >&2
         exit 1
     fi
-    # .netrc has no quoting, and go reads everything after a # as a comment.
-    if [[ "${NETRC_USER}${NETRC_PASSWORD}" == *[[:space:]#]* ]]; then
-        echo "ERROR: ${PARAM_USERNAME} and ${PARAM_PASSWORD} can't hold spaces or #, which .netrc can't represent." >&2
+    # go's .netrc reader has no quoting, and reads everything after a # as a
+    # comment. curl's, which git uses, strips the quotes from a value that
+    # starts with one (curl 7.84 and later), so go and git would send
+    # different credentials.
+    if [[ "${NETRC_USER}${NETRC_PASSWORD}" == *[[:space:]#]* || "${NETRC_USER}" == \"* || "${NETRC_PASSWORD}" == \"* ]]; then
+        echo "ERROR: ${PARAM_USERNAME} and ${PARAM_PASSWORD} can't hold spaces or #, or start with a double quote," >&2
+        echo "  which go and git read differently in .netrc." >&2
         exit 1
     fi
     NETRC_FILE=${NETRC:-${HOME:-}/.netrc}

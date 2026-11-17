@@ -174,6 +174,12 @@ run host=artifactory.example.com
 check "host without credentials fails" said "but PRIVATE_MODULES_USERNAME or PRIVATE_MODULES_TOKEN is empty or unset"
 run host=artifactory.example.com -- PRIVATE_MODULES_USERNAME=ci "PRIVATE_MODULES_TOKEN=has space"
 check "a token .netrc can't hold fails" said "can't hold spaces or #"
+run host=artifactory.example.com -- PRIVATE_MODULES_USERNAME=ci 'PRIVATE_MODULES_TOKEN="quoted"'
+check "a token that starts with a quote fails" said "or start with a double quote"
+run host=artifactory.example.com -- 'PRIVATE_MODULES_USERNAME="ci' PRIVATE_MODULES_TOKEN=x
+check "so does a user name that starts with one" said "or start with a double quote"
+run host=artifactory.example.com -- PRIVATE_MODULES_USERNAME=ci 'PRIVATE_MODULES_TOKEN=a"b'
+check "a quote inside a token passes, as both read it the same" succeeded
 run "host=bad host" -- PRIVATE_MODULES_USERNAME=ci PRIVATE_MODULES_TOKEN=x
 check "a host that isn't a host fails" said "host must be a host name"
 run host=artifactory.example.com username=1BAD
