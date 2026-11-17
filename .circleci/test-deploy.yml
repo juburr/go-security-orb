@@ -208,8 +208,26 @@ jobs:
   checks-test:
     docker:
       - image: cimg/go:1.27
+    # Stand-ins for a context's credentials, for configure_modules.
+    environment:
+      CONFIGURE_TEST_USER: ci
+      CONFIGURE_TEST_TOKEN: not-a-secret
     steps:
       - checkout
+      - go-security-orb/configure_modules:
+          goproxy: https://proxy.golang.org
+          gonosumdb: git.example.com/private/*
+          host: git.example.com
+          username: CONFIGURE_TEST_USER
+          password: CONFIGURE_TEST_TOKEN
+      - run:
+          name: Check What configure_modules Set Up
+          command: |
+            set -euo pipefail
+            test "$(go env GOPROXY)" = https://proxy.golang.org
+            test "$(go env GONOSUMDB)" = 'git.example.com/private/*'
+            test "$(sed -n 2p ~/.netrc)" = 'machine git.example.com login ci password not-a-secret'
+            test "$(stat -c %a ~/.netrc)" = 600
       - go-security-orb/install:
           tools: go govulncheck gosec go-licenses
       - go-security-orb/mod_verify:

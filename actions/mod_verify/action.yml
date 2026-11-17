@@ -8,10 +8,10 @@ description: >
   PATH, on a go.sum that doesn't match what go downloads, on a module cache
   whose contents were changed (go mod verify), on go.mod or go.sum entries the
   build needs and they lack, and on a vendor directory that go mod vendor
-  wouldn't write, unless report_only is true. It also sets up private modules
-  (GOPRIVATE and credentials in ~/.netrc) and GOTOOLCHAIN=local for later
-  steps, so run it first. The GitHub Actions twin of the orb's mod_verify
-  command.
+  wouldn't write, unless report_only is true. It also exports
+  GOTOOLCHAIN=local to later steps, so run it first, after
+  configure_modules when go fetches modules from a private proxy or host.
+  The GitHub Actions twin of the orb's mod_verify command.
 author: juburr
 
 inputs:
@@ -43,11 +43,6 @@ inputs:
       The package patterns whose dependencies, with their tests', must all be
       in go.mod and go.sum, separated by commas or spaces.
     default: ./...
-  password:
-    description: >
-      The environment variable that holds the password or token for
-      private_host.
-    default: PRIVATE_MODULES_TOKEN
   pin_toolchain:
     description: >
       Run go with GOTOOLCHAIN=local here, and export it to later steps, so a
@@ -55,21 +50,6 @@ inputs:
       different Go release. A go.mod that needs a newer Go than the one on the
       PATH then fails the step.
     default: "true"
-  private_host:
-    description: >
-      The host to give the credentials in username and password to, such as
-      github.com, written to ~/.netrc (or the file NETRC names) with mode 0600
-      for this step and later ones. go, and git when go fetches from it, read
-      them there. Empty writes no credentials.
-    default: ""
-  private_modules:
-    description: >
-      GOPRIVATE for this step and later ones: the module path patterns, such
-      as github.com/my-org/*, that go fetches straight from their hosts,
-      without the proxy or the checksum database, separated by commas. A
-      pattern that matches public modules, such as github.com, fails the step.
-      Empty leaves GOPRIVATE as the job sets it.
-    default: ""
   report_name:
     description: >
       The reports' file name, without extension: <report_name>.json,
@@ -99,10 +79,6 @@ inputs:
       Build tags, separated by commas, for packages that import some
       dependencies only with them.
     default: ""
-  username:
-    description: >
-      The environment variable that holds the user name for private_host.
-    default: PRIVATE_MODULES_USERNAME
   working_dir:
     description: >
       Directory to run in: modules are relative to it.
@@ -134,15 +110,11 @@ runs:
         PARAM_MODULES: ${{ inputs.modules }}
         PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
         PARAM_PACKAGES: ${{ inputs.packages }}
-        PARAM_PASSWORD: ${{ inputs.password }}
         PARAM_PIN_TOOLCHAIN: ${{ inputs.pin_toolchain }}
-        PARAM_PRIVATE_HOST: ${{ inputs.private_host }}
-        PARAM_PRIVATE_MODULES: ${{ inputs.private_modules }}
         PARAM_REPORT_NAME: ${{ inputs.report_name }}
         PARAM_REPORT_ONLY: ${{ inputs.report_only }}
         PARAM_RUN_RECORD: ${{ inputs.run_record }}
         PARAM_TAGS: ${{ inputs.tags }}
-        PARAM_USERNAME: ${{ inputs.username }}
       run: >-
         bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/mod_verify.sh"
         "SCRIPT_GO_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/go_security.sh"

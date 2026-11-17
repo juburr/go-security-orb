@@ -31,6 +31,8 @@ jobs:
           persist-credentials: false
       - name: Run the actions tests
         run: bash tests/actions_test.sh
+      - name: Run the configure_modules tests
+        run: bash tests/configure_modules_test.sh
 
   install:
     strategy:
@@ -138,9 +140,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./actions/configure_modules
+        env:
+          # Stand-ins for credentials from secrets.
+          CONFIGURE_TEST_USER: ci
+          CONFIGURE_TEST_TOKEN: not-a-secret
+        with:
+          goproxy: https://proxy.golang.org
+          gonosumdb: git.example.com/private/*
+          host: git.example.com
+          username: CONFIGURE_TEST_USER
+          password: CONFIGURE_TEST_TOKEN
       - uses: ./actions/install
         with:
           tools: go govulncheck gosec go-licenses
+      - name: Check what configure_modules set up
+        run: |
+          test "${GOPROXY}" = https://proxy.golang.org
+          test "${GONOSUMDB}" = 'git.example.com/private/*'
+          test "$(go env GOPROXY)" = https://proxy.golang.org
+          test "$(sed -n 2p ~/.netrc)" = 'machine git.example.com login ci password not-a-secret'
+          test "$(stat -c %a ~/.netrc)" = 600
       - uses: ./actions/mod_verify
         with:
           working_dir: tests/fixtures

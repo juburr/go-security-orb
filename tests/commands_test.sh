@@ -843,32 +843,6 @@ run mod_verify "working_dir=${LOCAL}/app" report_only=true -- "${MV_ENV[@]}" GOS
 check "report_only passes" succeeded
 check "the report lists both" json_is "${OUT}/mod-verify.json" '[.settings[] | select(.level == "fail") | .name] | join(",")' GOSUMDB,GOINSECURE
 
-begin "mod_verify: private modules"
-run mod_verify "working_dir=${LOCAL}/app" "private_modules=github.com/my-org/*" -- "${MV_ENV[@]}"
-check "private_modules is exported as GOPRIVATE" exported 'export GOPRIVATE=github.com/my-org/\*'
-run mod_verify "working_dir=${LOCAL}/app" private_modules=github.com -- "${MV_ENV[@]}"
-check "private_modules matching public modules fails" said "private_modules (github.com) matches public modules"
-check "before exporting it" not_file_has "${WORK}/bash_env" GOPRIVATE
-printf 'machine other.example.com login a password b\n' > "${HOME}/.netrc"
-run mod_verify "working_dir=${LOCAL}/app" private_host=git.example.com -- "${MV_ENV[@]}" \
-    PRIVATE_MODULES_USERNAME=ci PRIVATE_MODULES_TOKEN=s3cret-token
-check "private_host writes the credentials" file_has "${HOME}/.netrc" "machine git.example.com login ci password s3cret-token"
-check "first, so go uses them" [ "$(sed -n 2p "${HOME}/.netrc")" == "machine git.example.com login ci password s3cret-token" ]
-check "keeping the other entries" file_has "${HOME}/.netrc" "machine other.example.com login a password b"
-check "with mode 0600" mode_is "${HOME}/.netrc" 600
-check "never showing them" not_said "s3cret-token"
-run mod_verify "working_dir=${LOCAL}/app" private_host=git.example.com username=MY_USER password=MY_TOKEN -- "${MV_ENV[@]}" \
-    MY_USER=ci MY_TOKEN=n3w-token
-check "a second run replaces its entry" [ "$(grep -c 'machine git.example.com' "${HOME}/.netrc")" -eq 1 ]
-check "with the new token" file_has "${HOME}/.netrc" "password n3w-token"
-run mod_verify "working_dir=${LOCAL}/app" private_host=git.example.com -- "${MV_ENV[@]}"
-check "private_host without credentials fails" said "but PRIVATE_MODULES_USERNAME or PRIVATE_MODULES_TOKEN is empty or unset"
-run mod_verify "working_dir=${LOCAL}/app" private_host=git.example.com -- "${MV_ENV[@]}" \
-    PRIVATE_MODULES_USERNAME=ci "PRIVATE_MODULES_TOKEN=has space"
-check "a token .netrc can't hold fails" said "can't hold spaces or #"
-run mod_verify "working_dir=${LOCAL}/app" "private_host=bad host" -- "${MV_ENV[@]}"
-check "a private_host that isn't a host fails" said "private_host must be a host name"
-
 # ---------------------------------------------------------------- fips_bin
 # buildinfo FILE GO [BUILD_LINE...] [-- DEP...]: a stand-in binary FILE, and
 # what go version -m prints for it.

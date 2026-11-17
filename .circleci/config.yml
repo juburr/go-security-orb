@@ -48,6 +48,9 @@ jobs:
           name: Run command tests
           command: bash tests/commands_test.sh
       - run:
+          name: Run configure_modules tests
+          command: bash tests/configure_modules_test.sh
+      - run:
           name: Run wiring test
           command: bash tests/wiring_test.sh
   # Checks that every command has a GitHub Action that takes the same inputs and runs the same

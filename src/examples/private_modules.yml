@@ -1,31 +1,34 @@
 description: >
-  Use private modules safely: mod_verify sets GOPRIVATE for your
-  organization's modules only (a pattern that matches public modules, which
-  would turn checksum verification off for them, fails the job), writes the
-  credentials from a context to ~/.netrc for go and git, and pins
-  GOTOOLCHAIN=local, all for the steps after it. Then it checks every
-  dependency against go.mod and go.sum.
+  Fetch private modules through a module proxy, such as Artifactory:
+  configure_modules points GOPROXY at the proxy, writes the credentials from
+  a context to ~/.netrc, where go finds them, and names your own modules in
+  GONOSUMDB, which the public checksum database can't know, all for the steps
+  after it. A pattern that matches public modules, or credentials in the proxy
+  URL, fails the job. mod_verify then checks every dependency against go.mod
+  and go.sum, and that no setting turns checksum verification off.
 
 usage:
   version: 2.1
   orbs:
-    go-security: juburr/go-security-orb@0.1.1
+    go-security: juburr/go-security-orb@0.2.0
   jobs:
     security:
       docker:
         - image: cimg/go:1.27
       steps:
         - checkout
+        - go-security/configure_modules:
+            goproxy: https://artifactory.example.com/artifactory/api/go/go-virtual
+            gonosumdb: github.com/my-org/*
+            host: artifactory.example.com
+            username: JF_USER
+            password: JF_ACCESS_TOKEN
         - go-security/install
-        - go-security/mod_verify:
-            private_modules: github.com/my-org/*
-            private_host: github.com
-            username: PRIVATE_MODULES_USERNAME
-            password: PRIVATE_MODULES_TOKEN
+        - go-security/mod_verify
         - go-security/vulncheck
   workflows:
     security:
       jobs:
         - security:
-            # Holds PRIVATE_MODULES_USERNAME and PRIVATE_MODULES_TOKEN.
-            context: private-modules
+            # Holds JF_USER and JF_ACCESS_TOKEN.
+            context: artifactory

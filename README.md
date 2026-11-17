@@ -108,7 +108,7 @@ Every check tells findings apart from a tool that didn't complete: findings fail
 version: 2.1
 
 orbs:
-  go-security: juburr/go-security-orb@0.1.1
+  go-security: juburr/go-security-orb@0.2.0
 
 jobs:
   security:
@@ -144,13 +144,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: juburr/go-security-orb/actions/install@v0.1.1
+      - uses: juburr/go-security-orb/actions/install@v0.2.0
         with:
           tools: go govulncheck gosec go-licenses
-      - uses: juburr/go-security-orb/actions/mod_verify@v0.1.1
-      - uses: juburr/go-security-orb/actions/gosec@v0.1.1
-      - uses: juburr/go-security-orb/actions/vulncheck@v0.1.1
-      - uses: juburr/go-security-orb/actions/licenses@v0.1.1
+      - uses: juburr/go-security-orb/actions/mod_verify@v0.2.0
+      - uses: juburr/go-security-orb/actions/gosec@v0.2.0
+      - uses: juburr/go-security-orb/actions/vulncheck@v0.2.0
+      - uses: juburr/go-security-orb/actions/licenses@v0.2.0
 ```
 
 Each check writes its reports to `/tmp/go-security-reports` and stores them as artifacts, even when it fails. See [GitHub Actions](#-github-actions) for how the actions map to the orb's commands.
@@ -241,18 +241,35 @@ Build with `GOFIPS140`, then let `fips_bin` check what the binaries really are:
 
 ### Use Private Modules
 
-`mod_verify` sets `GOPRIVATE` and writes credentials for your module host to `~/.netrc` (mode 0600), for itself and every later step:
+`configure_modules` sets up where go fetches modules from, and writes credentials for one host to `~/.netrc` (mode 0600), for every later step. Run it first. Through a module proxy, such as Artifactory:
 
 ```yaml
-      - go-security/mod_verify:
-          private_modules: github.com/my-org/*
-          private_host: github.com
-          # The defaults: environment variables, such as from a context.
+      - go-security/configure_modules:
+          goproxy: https://artifactory.example.com/artifactory/api/go/go-virtual
+          # Your own modules, which the public checksum database can't know.
+          gonosumdb: github.com/my-org/*
+          host: artifactory.example.com
+          # Environment variables, such as from a context.
+          username: JF_USER
+          password: JF_ACCESS_TOKEN
+      - go-security/mod_verify
+```
+
+Or straight from your organization's repositories:
+
+```yaml
+      - go-security/configure_modules:
+          goprivate: github.com/my-org/*
+          host: github.com
+          # The defaults.
           username: PRIVATE_MODULES_USERNAME
           password: PRIVATE_MODULES_TOKEN
 ```
 
-A `private_modules` pattern that matches public modules, such as `github.com` or `github.com/*`, fails the step: go would fetch every module it matches without checking it against the checksum database.
+Use `gonosumdb`, not `goprivate`, for private modules a proxy serves: `GOPRIVATE` also sends go straight to their hosts, past the proxy. A pattern that matches public modules, such as `github.com` or `github.com/*`, fails the step, since go would fetch every module it matches without checking it against the checksum database. The same command is in [go-quality-orb](https://github.com/juburr/go-quality-orb), for jobs that only run its checks.
+
+> [!NOTE]
+> **Changed in v0.2.0:** `mod_verify` no longer takes `private_modules`, `private_host`, `username` and `password`. Move them to `configure_modules`, as `goprivate` and `host`, before `mod_verify`.
 
 ### Check Every Module
 
@@ -287,6 +304,21 @@ These parameters mean the same in every check that takes them:
 | `output_dir`, `report_name`, `junit`, `run_record`, `report_only`, `store_artifacts` | | See [Reports](#-reports). |
 
 String parameters expand environment variables (`$NAME`, `${NAME}`) with the CircleCI CLI, except `output_dir`, which is also passed to `store_artifacts`.
+
+### `go-security/configure_modules`
+
+Sets up where go fetches modules from, for every later step, and writes credentials for one host to `~/.netrc` (or the file `NETRC` names), mode 0600. go reads them there for a proxy and for modules it fetches straight from their host, and git reads them when go fetches with it. The entry goes first in the file, since go and git use the first entry for a host, and replaces the one an earlier run wrote. Nothing changes unless every parameter is valid: a pattern that matches public modules, credentials in a proxy URL, a proxy over plain HTTP to another machine, `GOSUMDB=off`, or a credential variable that is unset fails the step first. It doesn't need Go, so it can run before `install`. See [Use Private Modules](#use-private-modules).
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `goproxy` | *(empty)* | `GOPROXY`: proxy URLs, `direct` and `off`, separated by commas or pipes. Leave out `direct` to make every module come through the proxy. Plain HTTP is allowed only to this machine. |
+| `gonosumdb` | *(empty)* | `GONOSUMDB`: your own module path patterns, separated by commas, which go fetches through the proxy without asking the public checksum database. |
+| `goprivate` | *(empty)* | `GOPRIVATE`: module path patterns, separated by commas, which go fetches straight from their hosts, without the proxy or the checksum database. |
+| `gosumdb` | *(empty)* | `GOSUMDB`: the checksum database's name, with an optional `+key`, and an optional `https://` URL to reach it through, such as `sum.golang.org https://artifactory.example.com/artifactory/api/go/gosumdb`. `off` is refused. |
+| `host` | *(empty)* | The host, with an optional port, to write the credentials for. Empty writes none. |
+| `username`, `password` | `PRIVATE_MODULES_USERNAME`, `PRIVATE_MODULES_TOKEN` | The environment variables that hold the credentials for `host`. They never reach a command line or the log. |
+
+An empty setting leaves the job's own value; at least one parameter must be set.
 
 ### `go-security/install`
 
@@ -391,12 +423,9 @@ It also fails on settings that turn checksum verification off: `GOSUMDB=off`; `G
 | --- | --- | --- |
 | `pin_toolchain` | `true` | Run go with `GOTOOLCHAIN=local`, and export it to later steps, so a `go` or `toolchain` line in go.mod can't make go download and run another Go release. A go.mod that needs a newer Go than the one on the `PATH` then fails the step. |
 | `check_vendor` | `true` | Compare a module's `vendor` directory with what `go mod vendor` writes (Go 1.18 or newer). |
-| `private_modules` | *(empty)* | `GOPRIVATE` for this step and later ones. A pattern that matches public modules fails the step. See [Use Private Modules](#use-private-modules). |
-| `private_host` | *(empty)* | The host to write the credentials for to `~/.netrc` (or the file `NETRC` names), mode 0600, for this step and later ones. |
-| `username`, `password` | `PRIVATE_MODULES_USERNAME`, `PRIVATE_MODULES_TOKEN` | The environment variables that hold the credentials for `private_host`. They never reach the log. |
 | `report_name` | `mod-verify` | Writes `<report_name>.json`: each setting found, and each module's checks. |
 
-Run it first in a job: the settings it exports apply to the steps after it.
+Run it first in a job, after `configure_modules` when go fetches modules from a private proxy or host: `GOTOOLCHAIN`, which it exports, applies to the steps after it.
 
 ### `go-security/fips_bin`
 
@@ -432,23 +461,24 @@ Each of the orb's commands has a GitHub Action of the same name. The actions run
 
 | Action | Orb command |
 | --- | --- |
-| `juburr/go-security-orb/actions/install@v0.1.1` | [`go-security/install`](#go-securityinstall) |
-| `juburr/go-security-orb/actions/install_go@v0.1.1`, `install_govulncheck`, `install_gosec`, `install_go_licenses` | [`go-security/install_<tool>`](#go-securityinstall_tool) |
-| `juburr/go-security-orb/actions/vulncheck@v0.1.1` | [`go-security/vulncheck`](#go-securityvulncheck) |
-| `juburr/go-security-orb/actions/vulncheck_bin@v0.1.1` | [`go-security/vulncheck_bin`](#go-securityvulncheck_bin) |
-| `juburr/go-security-orb/actions/fetch_vuln_db@v0.1.1` | [`go-security/fetch_vuln_db`](#go-securityfetch_vuln_db) |
-| `juburr/go-security-orb/actions/gosec@v0.1.1` | [`go-security/gosec`](#go-securitygosec) |
-| `juburr/go-security-orb/actions/licenses@v0.1.1` | [`go-security/licenses`](#go-securitylicenses) |
-| `juburr/go-security-orb/actions/mod_verify@v0.1.1` | [`go-security/mod_verify`](#go-securitymod_verify) |
-| `juburr/go-security-orb/actions/fips_bin@v0.1.1` | [`go-security/fips_bin`](#go-securityfips_bin) |
-| `juburr/go-security-orb/actions/fips_test@v0.1.1` | [`go-security/fips_test`](#go-securityfips_test) |
+| `juburr/go-security-orb/actions/configure_modules@v0.2.0` | [`go-security/configure_modules`](#go-securityconfigure_modules) |
+| `juburr/go-security-orb/actions/install@v0.2.0` | [`go-security/install`](#go-securityinstall) |
+| `juburr/go-security-orb/actions/install_go@v0.2.0`, `install_govulncheck`, `install_gosec`, `install_go_licenses` | [`go-security/install_<tool>`](#go-securityinstall_tool) |
+| `juburr/go-security-orb/actions/vulncheck@v0.2.0` | [`go-security/vulncheck`](#go-securityvulncheck) |
+| `juburr/go-security-orb/actions/vulncheck_bin@v0.2.0` | [`go-security/vulncheck_bin`](#go-securityvulncheck_bin) |
+| `juburr/go-security-orb/actions/fetch_vuln_db@v0.2.0` | [`go-security/fetch_vuln_db`](#go-securityfetch_vuln_db) |
+| `juburr/go-security-orb/actions/gosec@v0.2.0` | [`go-security/gosec`](#go-securitygosec) |
+| `juburr/go-security-orb/actions/licenses@v0.2.0` | [`go-security/licenses`](#go-securitylicenses) |
+| `juburr/go-security-orb/actions/mod_verify@v0.2.0` | [`go-security/mod_verify`](#go-securitymod_verify) |
+| `juburr/go-security-orb/actions/fips_bin@v0.2.0` | [`go-security/fips_bin`](#go-securityfips_bin) |
+| `juburr/go-security-orb/actions/fips_test@v0.2.0` | [`go-security/fips_test`](#go-securityfips_test) |
 
-The per-tool install actions are `juburr/go-security-orb/actions/install_go@v0.1.1`, `juburr/go-security-orb/actions/install_govulncheck@v0.1.1`, `juburr/go-security-orb/actions/install_gosec@v0.1.1` and `juburr/go-security-orb/actions/install_go_licenses@v0.1.1`.
+The per-tool install actions are `juburr/go-security-orb/actions/install_go@v0.2.0`, `juburr/go-security-orb/actions/install_govulncheck@v0.2.0`, `juburr/go-security-orb/actions/install_gosec@v0.2.0` and `juburr/go-security-orb/actions/install_go_licenses@v0.2.0`.
 
 To upload SARIF to GitHub code scanning (the job needs `permissions: security-events: write`), point the upload at the report:
 
 ```yaml
-      - uses: juburr/go-security-orb/actions/gosec@v0.1.1
+      - uses: juburr/go-security-orb/actions/gosec@v0.2.0
         with:
           report_only: "true"
       - uses: github/codeql-action/upload-sarif@v4
@@ -459,12 +489,12 @@ To upload SARIF to GitHub code scanning (the job needs `permissions: security-ev
 
 How they differ from the orb's commands:
 
-- **Versions.** An action is referenced by the repository's release tag, such as `v0.1.1`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/go-security-orb/actions/vulncheck@<sha> # v0.1.1`.
+- **Versions.** An action is referenced by the repository's release tag, such as `v0.2.0`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/go-security-orb/actions/vulncheck@<sha> # v0.2.0`.
 - **Inputs are strings.** Write booleans and numbers quoted, such as `report_only: "true"`.
-- **Environment variables.** The orb expands `$NAME` in its parameters with the CircleCI CLI, which GitHub's runners don't have, so the actions take values as they are. Use GitHub's expressions instead, such as `go_version: ${{ vars.GO_RELEASE }}`. For `mod_verify`'s credentials, set the variables `username` and `password` name from secrets, at the job or step level.
+- **Environment variables.** The orb expands `$NAME` in its parameters with the CircleCI CLI, which GitHub's runners don't have, so the actions take values as they are. Use GitHub's expressions instead, such as `go_version: ${{ vars.GO_RELEASE }}`. For `configure_modules`' credentials, set the variables `username` and `password` name from secrets, at the job or step level.
 - **Artifacts.** A command that stores artifacts uploads `output_dir` with [`actions/upload-artifact`](https://github.com/actions/upload-artifact), even when the step fails, as an artifact named `go-security-reports-<report_name>-` and a random suffix, since artifact names must be unique in a workflow run. JUnit files are in `output_dir/junit/`, for any JUnit report action.
 - **Caching.** `caching` stores each tool's verified download or build with [`actions/cache`](https://github.com/actions/cache), with the same key ingredients as the orb. The cache is restored before the install and saved right after it, and what it restores is verified again. It counts toward the repository's GitHub Actions cache storage.
-- **Exports.** What a command exports to later steps (`PATH` entries, `GOTOOLCHAIN`, `GOPRIVATE`, `GO_SECURITY_VULN_DB`) is passed on through `GITHUB_PATH` and `GITHUB_ENV`.
+- **Exports.** What a command exports to later steps (`PATH` entries, `GOTOOLCHAIN`, `GOPROXY`, `GONOSUMDB`, `GOPRIVATE`, `GOSUMDB`, `GO_SECURITY_VULN_DB`) is passed on through `GITHUB_PATH` and `GITHUB_ENV`.
 - **Runners.** CI runs every action on GitHub-hosted `ubuntu-24.04` and `ubuntu-24.04-arm` runners.
 
 The actions are composite actions in [`actions/`](actions), next to the orb's source. Each passes its inputs to the orb's script as environment variables, never pasting them into a script, and [`actions/run_script.sh`](actions/run_script.sh) gives the script what CircleCI would: a `BASH_ENV` file for the values it hands to later steps, which it then passes on through `GITHUB_PATH` and `GITHUB_ENV`.
@@ -496,7 +526,7 @@ A run record is a JSON document, described by [`schemas/run-record.v1.json`](sch
 - **Least Privilege**: Installs to user-owned directories by default, Go included, with no `sudo` usage anywhere in this orb. Everything runs as the job's user.
 - **Integrity**: SHA-512 checksum validation of every tool, on by default and failing closed: a version this orb has no checksum for is refused before anything is downloaded, and a download that doesn't match is never installed. govulncheck and go-licenses, which publish no binaries, are built with a pinned and verified Go release and the binary checked against the table. See [Checksum Verification](#-checksum-verification).
 - **Fail closed**: a tool that can't complete fails the step even with `report_only`, and so do the ways these tools pass while checking nothing: a vulnerability database without its index or age, a standard library version govulncheck couldn't read, a file with no Go build information, a go-licenses report without your own packages, a gosec that couldn't type-check, and a Go too old for FIPS mode in `fips_test`.
-- **Confidentiality**: The only secrets are `mod_verify`'s module credentials, read from environment variables, never put on a command line or in the log, and written to `~/.netrc` with mode 0600. `extra_args` and the lists are split without running anything in them, so a value that reached one through an environment variable, such as a branch name, can't run a command. URLs with credentials, a query or a fragment are refused before they reach the log or a report. The GitHub Actions pass inputs to the scripts as environment variables, never pasting them into a script, and pin every action they use to a commit SHA.
+- **Confidentiality**: The only secrets are `configure_modules`' module credentials, read from environment variables, never put on a command line or in the log, and written to `~/.netrc` with mode 0600. `extra_args` and the lists are split without running anything in them, so a value that reached one through an environment variable, such as a branch name, can't run a command. URLs with credentials, a query or a fragment are refused before they reach the log or a report. The GitHub Actions pass inputs to the scripts as environment variables, never pasting them into a script, and pin every action they use to a commit SHA.
 - **Privacy**: No usage data of any kind is collected or shipped back to the orb developer.
 
 > [!IMPORTANT]
@@ -538,7 +568,7 @@ Hosts to allow (HTTPS, port 443) when running on a locked-down, self-hosted runn
 | `github.com` | `install` (gosec) | Release downloads | `download_base_url` is set |
 | `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | `install` (gosec) | Where GitHub redirects release downloads | `download_base_url` is set |
 | `dl.google.com` | `install` (`go`, and govulncheck and go-licenses when the job's Go isn't the release that builds them) | Go release archives | `go_download_base_url` is set; the tools come from the cache |
-| `proxy.golang.org`, `sum.golang.org` | `install` (govulncheck, go-licenses); every check that resolves your modules' dependencies | Go modules and their checksums, as Go itself fetches them | `GOPROXY` and `GOSUMDB` name your own (or `GOFLAGS=-mod=vendor`); the module cache already holds them |
+| `proxy.golang.org`, `sum.golang.org` | `install` (govulncheck, go-licenses); every check that resolves your modules' dependencies | Go modules and their checksums, as Go itself fetches them | `GOPROXY` and `GOSUMDB` name your own, such as with `configure_modules` (or `GOFLAGS=-mod=vendor`); the module cache already holds them |
 | `vuln.go.dev` | `vulncheck`, `vulncheck_bin`, `fetch_vuln_db` | The Go vulnerability database | `db` or `GO_SECURITY_VULN_DB` names a local copy or a mirror; `fetch_vuln_db`'s `source` names a mirror or a local file |
 | The code hosts of your dependencies | `licenses` | go-licenses looks up each license's URL; without access the URL is left empty, and the check is the same | Never: the lookups are best effort |
 | CircleCI's cache storage, or GitHub's | The install commands and actions with `caching: true` (the default) | `restore_cache`/`save_cache`, or `actions/cache` | `caching` is `false` |

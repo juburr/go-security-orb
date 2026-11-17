@@ -27,10 +27,6 @@ RUN_RECORD=$(gs_bool run_record "${PARAM_RUN_RECORD}")
 PIN_TOOLCHAIN=$(gs_bool pin_toolchain "${PARAM_PIN_TOOLCHAIN}")
 CHECK_VENDOR=$(gs_bool check_vendor "${PARAM_CHECK_VENDOR}")
 TAGS=$(gs_subst "${PARAM_TAGS}")
-PRIVATE_MODULES=$(gs_subst "${PARAM_PRIVATE_MODULES}")
-PRIVATE_HOST=$(gs_subst "${PARAM_PRIVATE_HOST}")
-gs_env_var_name username "${PARAM_USERNAME}"
-gs_env_var_name password "${PARAM_PASSWORD}"
 gs_output "${PARAM_OUTPUT_DIR}" "${PARAM_REPORT_NAME}"
 gs_require_jq
 gs_go
@@ -42,18 +38,11 @@ if [[ "${TAGS}" == *[[:space:]]* ]]; then
 fi
 
 WORK=$(mktemp -d)
-NETRC_TMP=""
-cleanup() {
-    rm -rf "${WORK}"
-    if [[ -n "${NETRC_TMP}" ]]; then
-        rm -f "${NETRC_TMP}"
-    fi
-}
-trap cleanup EXIT
+trap 'rm -rf "${WORK}"' EXIT
 
 # Module paths on public hosts. A GOPRIVATE, GONOSUMDB or GONOPROXY pattern
 # that matches one of these matches far more than an organization's own
-# modules.
+# modules. configure_modules.sh refuses patterns against the same list.
 PUBLIC=(github.com/owner/repo gitlab.com/owner/repo bitbucket.org/owner/repo golang.org/x/net golang.org/toolchain
     google.golang.org/grpc gopkg.in/yaml.v3 go.googlesource.com/repo k8s.io/api sigs.k8s.io/yaml go.uber.org/zap
     cloud.google.com/go go.opentelemetry.io/otel honnef.co/go/tools)
@@ -84,67 +73,6 @@ public_match() {
     done
 }
 
-# Private modules: GOPRIVATE, and credentials for their host.
-if [[ -n "${PRIVATE_MODULES}" ]]; then
-    if [[ "${PRIVATE_MODULES}" == *[[:space:]]* ]]; then
-        echo "ERROR: private_modules must be separated by commas, without spaces." >&2
-        exit 1
-    fi
-    hit=$(public_match "${PRIVATE_MODULES}")
-    if [[ -n "${hit}" ]]; then
-        echo "ERROR: private_modules (${PRIVATE_MODULES}) matches public modules such as ${hit}, which go would then" >&2
-        echo "  fetch without checking them against the checksum database. Name your own modules, such as github.com/my-org/*." >&2
-        exit 1
-    fi
-    export GOPRIVATE=${PRIVATE_MODULES}
-    gs_export GOPRIVATE "${PRIVATE_MODULES}"
-    echo "GOPRIVATE=${PRIVATE_MODULES}, here and in later steps."
-fi
-if [[ -n "${PRIVATE_HOST}" ]]; then
-    # The credentials must never reach the log.
-    set +o xtrace
-    if ! gs_match "${PRIVATE_HOST}" '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'; then
-        echo "ERROR: private_host must be a host name, with an optional port, not '${PRIVATE_HOST}'." >&2
-        exit 1
-    fi
-    NETRC_USER=${!PARAM_USERNAME:-}
-    NETRC_PASSWORD=${!PARAM_PASSWORD:-}
-    if [[ -z "${NETRC_USER}" || -z "${NETRC_PASSWORD}" ]]; then
-        echo "ERROR: private_host is ${PRIVATE_HOST}, but ${PARAM_USERNAME} or ${PARAM_PASSWORD} is empty or unset." >&2
-        echo "  Set both, such as in a CircleCI context or as GitHub Actions secrets, or leave private_host empty." >&2
-        exit 1
-    fi
-    # .netrc has no quoting, and go reads everything after a # as a comment.
-    if [[ "${NETRC_USER}${NETRC_PASSWORD}" == *[[:space:]#]* ]]; then
-        echo "ERROR: ${PARAM_USERNAME} and ${PARAM_PASSWORD} can't hold spaces or #, which .netrc can't represent." >&2
-        exit 1
-    fi
-    NETRC_FILE=${NETRC:-${HOME:-}/.netrc}
-    if [[ "${NETRC_FILE}" != /?* ]]; then
-        echo "ERROR: Neither NETRC nor HOME is set, so there is no .netrc to write the credentials to." >&2
-        exit 1
-    fi
-    mkdir -p "${NETRC_FILE%/*}"
-    NETRC_TMP=$(umask 077 && mktemp "${NETRC_FILE%/*}/.netrc.XXXXXX")
-    # The entry goes first, since go and git use the first entry for a host,
-    # and replaces the one an earlier run of this command wrote.
-    {
-        printf '# go-security-orb mod_verify %s\n' "${PRIVATE_HOST}"
-        printf 'machine %s login %s password %s\n' "${PRIVATE_HOST}" "${NETRC_USER}" "${NETRC_PASSWORD}"
-        if [[ -f "${NETRC_FILE}" ]]; then
-            awk -v marker="# go-security-orb mod_verify ${PRIVATE_HOST}" \
-                'skip { skip = 0; next } $0 == marker { skip = 1; next } { print }' "${NETRC_FILE}"
-        fi
-    } > "${NETRC_TMP}"
-    chmod 600 "${NETRC_TMP}"
-    if ! mv -f -- "${NETRC_TMP}" "${NETRC_FILE}"; then
-        echo "ERROR: Could not write ${NETRC_FILE}." >&2
-        exit 1
-    fi
-    NETRC_TMP=""
-    unset NETRC_USER NETRC_PASSWORD
-    echo "Wrote the credentials in ${PARAM_USERNAME} and ${PARAM_PASSWORD} for ${PRIVATE_HOST} to ${NETRC_FILE}, for this step and later ones."
-fi
 if [[ "${PIN_TOOLCHAIN}" == true ]]; then
     export GOTOOLCHAIN=local
     gs_export GOTOOLCHAIN local

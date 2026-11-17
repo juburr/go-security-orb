@@ -7,9 +7,9 @@ description: >
   PATH, on a go.sum that doesn't match what go downloads, on a module cache
   whose contents were changed (go mod verify), on go.mod or go.sum entries
   the build needs and they lack, and on a vendor directory that go mod vendor
-  wouldn't write, unless report_only is true. It also sets up private modules
-  (GOPRIVATE and credentials in ~/.netrc) and GOTOOLCHAIN=local for later
-  steps, so run it first.
+  wouldn't write, unless report_only is true. It also exports
+  GOTOOLCHAIN=local to later steps, so run it first, after
+  configure_modules when go fetches modules from a private proxy or host.
 parameters:
   working_dir:
     type: string
@@ -52,36 +52,6 @@ parameters:
     description: >
       In a module with a vendor directory (vendor/modules.txt), check that it
       holds exactly what go mod vendor writes. Needs Go 1.18 or newer.
-  private_modules:
-    type: string
-    default: ""
-    description: >
-      GOPRIVATE for this step and later ones: the module path patterns, such
-      as github.com/my-org/*, that go fetches straight from their hosts,
-      without the proxy or the checksum database, separated by commas. A
-      pattern that matches public modules, such as github.com, fails the
-      step. Empty leaves GOPRIVATE as the job sets it. Environment variables
-      are expanded.
-  private_host:
-    type: string
-    default: ""
-    description: >
-      The host to give the credentials in username and password to, such as
-      github.com, written to ~/.netrc (or the file NETRC names) with mode
-      0600 for this step and later ones. go, and git when go fetches from it,
-      read them there. Empty writes no credentials. Environment variables are
-      expanded.
-  username:
-    type: env_var_name
-    default: PRIVATE_MODULES_USERNAME
-    description: >
-      The environment variable that holds the user name for private_host.
-  password:
-    type: env_var_name
-    default: PRIVATE_MODULES_TOKEN
-    description: >
-      The environment variable that holds the password or token for
-      private_host.
   output_dir:
     type: string
     default: /tmp/go-security-reports
@@ -130,15 +100,11 @@ steps:
         PARAM_MODULES: << parameters.modules >>
         PARAM_OUTPUT_DIR: << parameters.output_dir >>
         PARAM_PACKAGES: << parameters.packages >>
-        PARAM_PASSWORD: << parameters.password >>
         PARAM_PIN_TOOLCHAIN: << parameters.pin_toolchain >>
-        PARAM_PRIVATE_HOST: << parameters.private_host >>
-        PARAM_PRIVATE_MODULES: << parameters.private_modules >>
         PARAM_REPORT_NAME: << parameters.report_name >>
         PARAM_REPORT_ONLY: << parameters.report_only >>
         PARAM_RUN_RECORD: << parameters.run_record >>
         PARAM_TAGS: << parameters.tags >>
-        PARAM_USERNAME: << parameters.username >>
         SCRIPT_GO_SECURITY_LIB: << include(scripts/lib/go_security.sh) >>
       command: << include(scripts/mod_verify.sh) >>
   - when:
