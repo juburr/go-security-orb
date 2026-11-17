@@ -108,6 +108,17 @@ expected = "Basic " + base64.b64encode(("ci:" + password).encode()).decode()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    # Every reply says how long its body is: without that, curl reads one to
+    # the end of the connection, and some OpenSSL builds then fail it, since
+    # Python closes the TLS connection without a close_notify.
+    def reply(self, status, headers=(), body=b""):
+        self.send_response(status)
+        for name, value in headers:
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         host = self.headers.get("Host", "").rsplit(":", 1)[0]
         auth = self.headers.get("Authorization")
@@ -116,29 +127,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f.write(f"{host} {self.path} {login}\n")
         if host == "localhost":
             if auth != expected:
-                self.send_response(401)
-                self.send_header("WWW-Authenticate", 'Basic realm="mirror"')
-                self.end_headers()
+                self.reply(401, [("WWW-Authenticate", 'Basic realm="mirror"')])
                 return
-            self.send_response(302)
-            self.send_header("Location", f"https://127.0.0.1:{self.server.server_port}/storage{self.path}")
-            self.end_headers()
+            self.reply(302, [("Location", f"https://127.0.0.1:{self.server.server_port}/storage{self.path}")])
             return
         if host == "127.0.0.1" and self.path.startswith("/storage/"):
             try:
                 with open(root + self.path[len("/storage"):], "rb") as f:
                     data = f.read()
             except OSError:
-                self.send_response(404)
-                self.end_headers()
+                self.reply(404)
                 return
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            self.reply(200, body=data)
             return
-        self.send_response(404)
-        self.end_headers()
+        self.reply(404)
 
     def log_message(self, *args):
         pass
