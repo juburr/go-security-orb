@@ -1,0 +1,82 @@
+description: >
+  Sets up where go fetches modules from, for every later step: GOPROXY,
+  GONOSUMDB, GOPRIVATE and GOSUMDB, and credentials for one host, such as a
+  private module proxy or the host of your organization's repositories,
+  written to ~/.netrc. go reads them there for a proxy and for modules it
+  fetches straight from their host, and git reads them when go fetches with
+  it. The credentials come from environment variables, such as a context's,
+  and never reach a command line or the log. A pattern that matches public
+  modules, credentials in a proxy URL, a proxy over plain HTTP to another
+  machine, and GOSUMDB=off fail the step before it changes anything. The
+  same command is in go-security-orb and go-quality-orb; run it once, before
+  any step that runs go.
+parameters:
+  goproxy:
+    type: string
+    default: ""
+    description: >
+      GOPROXY for later steps: proxy URLs, direct and off, separated by
+      commas or pipes, such as
+      https://artifactory.example.com/artifactory/api/go/go-virtual. Leave
+      out direct to make every module come through the proxy. Give the
+      credentials in host, username and password, never in the URL. Empty
+      leaves GOPROXY as the job sets it. Environment variables are expanded.
+  gonosumdb:
+    type: string
+    default: ""
+    description: >
+      GONOSUMDB for later steps: your own module path patterns, such as
+      github.com/my-org/*, separated by commas, which the public checksum
+      database can't know. go still fetches them through goproxy, so use
+      this, not goprivate, for private modules a proxy serves. Empty leaves
+      GONOSUMDB as the job sets it. Environment variables are expanded.
+  goprivate:
+    type: string
+    default: ""
+    description: >
+      GOPRIVATE for later steps: module path patterns, separated by commas,
+      that go fetches straight from their hosts, without the proxy or the
+      checksum database. Empty leaves GOPRIVATE as the job sets it.
+      Environment variables are expanded.
+  gosumdb:
+    type: string
+    default: ""
+    description: >
+      GOSUMDB for later steps: the checksum database's name, with an optional
+      +key, and an optional https:// URL to reach it through, such as
+      "sum.golang.org https://artifactory.example.com/artifactory/api/go/gosumdb"
+      where sum.golang.org isn't reachable. off is refused. Empty leaves
+      GOSUMDB as the job sets it. Environment variables are expanded.
+  host:
+    type: string
+    default: ""
+    description: >
+      The host to write the credentials in username and password for, with
+      an optional port, such as artifactory.example.com or github.com. They
+      go first in ~/.netrc (or the file NETRC names), mode 0600, replacing
+      the entry an earlier run wrote. With a port, the host gets two entries,
+      since go looks it up with the port and git without. Empty writes no
+      credentials.
+      Environment variables are expanded.
+  username:
+    type: env_var_name
+    default: PRIVATE_MODULES_USERNAME
+    description: >
+      The environment variable that holds the user name for host.
+  password:
+    type: env_var_name
+    default: PRIVATE_MODULES_TOKEN
+    description: >
+      The environment variable that holds the password or token for host.
+steps:
+  - run:
+      name: Configure Go modules
+      environment:
+        PARAM_GONOSUMDB: << parameters.gonosumdb >>
+        PARAM_GOPRIVATE: << parameters.goprivate >>
+        PARAM_GOPROXY: << parameters.goproxy >>
+        PARAM_GOSUMDB: << parameters.gosumdb >>
+        PARAM_HOST: << parameters.host >>
+        PARAM_PASSWORD: << parameters.password >>
+        PARAM_USERNAME: << parameters.username >>
+      command: << include(scripts/configure_modules.sh) >>
