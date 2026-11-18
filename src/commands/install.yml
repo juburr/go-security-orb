@@ -31,8 +31,11 @@ parameters:
       of https://github.com. It replaces https://github.com in the release
       URL, so the mirror must serve the same paths. It must be an https://
       URL, without credentials (user:password@) or a query or fragment, which
-      would show in the log. What is downloaded is still verified against
-      this orb's checksum table.
+      would show in the log. A mirror that needs a login gets it from the
+      entry for its host in the .netrc file (NETRC, or ~/.netrc), such as
+      configure_modules writes, and curl sends it to the mirror alone, never
+      to a host the mirror redirects to. What is downloaded is still verified
+      against this orb's checksum table.
   go_download_base_url:
     type: string
     default: ""

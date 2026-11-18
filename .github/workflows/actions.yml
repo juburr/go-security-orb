@@ -33,6 +33,8 @@ jobs:
         run: bash tests/actions_test.sh
       - name: Run the configure_modules tests
         run: bash tests/configure_modules_test.sh
+      - name: Run the mirror login tests
+        run: bash tests/mirror_login_test.sh
 
   install:
     strategy:

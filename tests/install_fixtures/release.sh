@@ -1,8 +1,8 @@
 # shellcheck shell=bash disable=SC2034 # a fragment: the install contract it is spliced into reads these
 # Release binaries downloaded from GitHub (gosec).
 # On top of the shared contract, the download_base_url mirror: it replaces
-# https://github.com in the release URL, and what it serves is verified like
-# any download.
+# https://github.com in the release URL, gets the login the .netrc file holds
+# for its host, and what it serves is verified like any download.
 FIXTURE_ORIGIN="https://github.com"
 
 fixture_checks() {
@@ -26,6 +26,15 @@ fixture_checks() {
     check "downloads from the mirror alone" downloaded "${mirror_url}"
     check "once" download_count 1
     check "says which mirror it uses, and what it replaces" said "download mirror:  ${mirror} (in place of ${FIXTURE_ORIGIN})"
+    new_case
+    printf 'machine github.com login gh password gh-token\nmachine mirror.example login ci password s3cret\n' > "${CASE}/home/.netrc"
+    chmod 600 "${CASE}/home/.netrc"
+    run_install "PARAM_DOWNLOAD_BASE_URL=${mirror}"
+    check "a mirror that needs a login gets the .netrc entry for its host" \
+        grep -qxF "${mirror_url} netrc=600:machine mirror.example login ci password s3cret  location-trusted=no-and-follows" \
+        "${CASE}/downloads.log.login"
+    check "and installs" installed
+    check "without showing the login" not_said "s3cret"
     new_case
     # shellcheck disable=SC2016 # expanded by install.sh
     run_install 'PARAM_DOWNLOAD_BASE_URL=${ORB_TEST_MIRROR}' "ORB_TEST_MIRROR=${mirror}"

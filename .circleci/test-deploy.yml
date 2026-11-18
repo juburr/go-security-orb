@@ -109,6 +109,9 @@ jobs:
             grep -q "UNVERIFIED" install.log
             bin/gosec -version | grep -qx "Version: ${UNLISTED_GOSEC}"
       - run:
+          name: A Mirror That Needs A Login Gets It, And No Other Host Does
+          command: bash tests/mirror_login_test.sh
+      - run:
           name: A Mirror Serving A Tampered Release Is Rejected
           command: |
             REPO_DIR=$(pwd)
