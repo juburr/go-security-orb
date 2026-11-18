@@ -510,14 +510,18 @@ orb_use_mirror() {
     fi
     # The awk program writes the entry straight to the private file, so the
     # login never passes through a shell variable or a command line. It reads
-    # the file as curl does, a token at a time: a line starting with # is a
-    # comment, and a macdef runs to the next blank line. The first machine
+    # the file as curl does, a token at a time: a line whose first
+    # non-blank character is # is a comment, wherever it falls, and a macdef
+    # runs to the next blank line. The first machine
     # entry named after the host, or the host and port as go names it, wins,
     # as it does for curl and go; a default entry is never used.
     ORB_MIRROR_NETRC="${ORB_WORK_DIR}/mirror.netrc"
     (umask 077 && awk -v host="${ORB_MIRROR_HOST}" -v port="${ORB_MIRROR_PORT}" '
         function finish() { exit }
         macro { if ($0 ~ /^[ \t\r]*$/) { macro = 0 } next }
+        # A comment line, indented or not, is skipped even between a
+        # keyword and its value, as curl skips it.
+        /^[ \t]*#/ { next }
         {
             sub(/\r$/, "")
             for (i = 1; i <= NF; i++) {

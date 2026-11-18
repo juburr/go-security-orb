@@ -21,7 +21,8 @@
 #     old curl
 #   - a download mirror gets the login the .netrc file (NETRC, or ~/.netrc)
 #     holds for its host, and nothing else does: curl gets a private file
-#     with that one entry, only for URLs under the mirror, never a default
+#     with that one entry (read as curl reads it, comment lines skipped
+#     anywhere), only for URLs under the mirror, never a default
 #     entry or one without a password, and wget gets none (the install
 #     refuses)
 #   - install_path expands variables and ~/, defaults under HOME, must be
@@ -780,6 +781,10 @@ new_case
 mirror_download 'macdef init\nmachine mirror.example login macro password macro\n\n# machine mirror.example login commented password out\nmachine mirror.example\n  login ci\n  password multi-line\n'
 check "a macdef body and comments are skipped, and an entry can span lines" \
     login_for "${MIRROR}/asset netrc=600:machine mirror.example login ci password multi-line  location-trusted=no-and-follows"
+new_case
+mirror_download 'machine mirror.example login ci password\n# a note between a keyword and its value\n   # and an indented one\nafter-comments\n'
+check "a comment line between a keyword and its value is skipped, as curl skips it" \
+    login_for "${MIRROR}/asset netrc=600:machine mirror.example login ci password after-comments  location-trusted=no-and-follows"
 new_case
 mirror_download "${SECRET_NETRC}"
 chmod 644 "${CASE}/home/.netrc"
