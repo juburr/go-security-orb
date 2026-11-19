@@ -22,9 +22,9 @@
 #   - a download mirror gets the login the .netrc file (NETRC, or ~/.netrc)
 #     holds for its host, and nothing else does: curl gets a private file
 #     with that one entry (read as curl reads it, comment lines skipped
-#     anywhere), only for URLs under the mirror, never a default
-#     entry or one without a password, and wget gets none (the install
-#     refuses)
+#     anywhere and a quoted string one token), only for URLs under the
+#     mirror, never a default entry or one without a password, and wget
+#     gets none (the install refuses)
 #   - install_path expands variables and ~/, defaults under HOME, must be
 #     absolute without a ':', and is added to the PATH of later steps only when it isn't
 #     already there; another copy earlier on the PATH is reported
@@ -777,6 +777,33 @@ new_case
 mirror_download 'machine mirror.example login ci password "quoted value"\n'
 check "a quoted value is not used" login_for "${MIRROR}/asset netrc=none location-trusted=default"
 check "with a warning" said "has a quoted login or password"
+new_case
+mirror_download 'machine other.example login other password "prefix machine mirror.example login stolen password other-secret suffix"\nmachine mirror.example login ci password s3cret\n'
+check "a quoted string is one token, so a keyword in another entry's quoted value starts no entry" \
+    login_for "${MIRROR}/asset netrc=600:machine mirror.example login ci password s3cret  location-trusted=no-and-follows"
+new_case
+mirror_download 'machine other.example login "a default b" password "x \\" machine mirror.example login stolen password leaked \\" y"\nMACHINE mirror.example LOGIN ci PASSWORD s3cret\n'
+check "nor does an escaped quote or a default inside one, and keywords are read in any case" \
+    login_for "${MIRROR}/asset netrc=600:machine mirror.example login ci password s3cret  location-trusted=no-and-follows"
+new_case
+mirror_download 'macdef "init"\nmachine mirror.example login macro password macro\n\nmachine mirror.example login ci password s3cret\n'
+check "a macdef with a quoted name still skips its body" \
+    login_for "${MIRROR}/asset netrc=600:machine mirror.example login ci password s3cret  location-trusted=no-and-follows"
+new_case
+mirror_download 'machine other.example login other password "unclosed\nmachine mirror.example login ci password s3cret\n'
+check "a quote that doesn't end on its line, which curl refuses, means no login" \
+    login_for "${MIRROR}/asset netrc=none location-trusted=default"
+check "with a warning" said "has a quote that doesn't end on its line"
+new_case
+MIRROR="https://[::1]:8443/github"
+mirror_download 'machine ::1:8443 login other password another-address\nmachine ::1 login ci password v6\n'
+check "an IPv6 mirror's entry names the address without the brackets, as curl does" \
+    login_for "${MIRROR}/asset netrc=600:machine ::1 login ci password v6  location-trusted=no-and-follows"
+new_case
+mirror_download 'machine [::1]:8443 login ci password v6-port\n'
+check "or with them and the port, as go does" \
+    login_for "${MIRROR}/asset netrc=600:machine ::1 login ci password v6-port  location-trusted=no-and-follows"
+MIRROR="https://Mirror.Example:8443/artifactory/github"
 new_case
 mirror_download 'macdef init\nmachine mirror.example login macro password macro\n\n# machine mirror.example login commented password out\nmachine mirror.example\n  login ci\n  password multi-line\n'
 check "a macdef body and comments are skipped, and an entry can span lines" \
